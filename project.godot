@@ -1,0 +1,22 @@
+config_version=5
+
+[application]
+
+config/name="Gravity_Flip_Connect 4"
+run/main_scene="uid://d0nlowqesmh4t"
+config/features=PackedStringArray("4.6", "Mobile")
+config/icon="res://icon.svg"
+
+[display]
+
+window/size/viewport_width=640
+window/size/viewport_height=480
+
+[physics]
+
+3d/physics_engine="Jolt Physics"
+
+[rendering]
+
+rendering_device/driver.windows="d3d12"
+renderer/rendering_method="mobile"

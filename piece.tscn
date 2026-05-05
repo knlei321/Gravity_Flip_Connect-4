@@ -1,0 +1,10 @@
+[gd_scene format=3 uid="uid://dn4degfhgvmaj"]
+
+[ext_resource type="Texture2D" uid="uid://cn0skit87qhpk" path="res://art/black_piece.png" id="1_hisf2"]
+[ext_resource type="Script" uid="uid://bkchiob7hw5hq" path="res://code/piece.gd" id="2_sk825"]
+
+[node name="Piece" type="Sprite2D" unique_id=1743952971]
+position = Vector2(320, 240)
+scale = Vector2(0.05, 0.05)
+texture = ExtResource("1_hisf2")
+script = ExtResource("2_sk825")
