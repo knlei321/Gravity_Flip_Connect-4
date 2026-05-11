@@ -4,7 +4,6 @@
 [ext_resource type="Script" uid="uid://bkchiob7hw5hq" path="res://code/piece.gd" id="2_sk825"]
 
 [node name="Piece" type="Sprite2D" unique_id=1743952971]
-position = Vector2(320, 240)
-scale = Vector2(0.05, 0.05)
+scale = Vector2(0.1, 0.1)
 texture = ExtResource("1_hisf2")
 script = ExtResource("2_sk825")
