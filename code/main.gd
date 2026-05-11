@@ -1,31 +1,33 @@
 extends Node2D
 
 # --- 常數與設定 ---
-const BOARD_SIZE = 6 # 棋盤
+const BOARD_SIZE = 6
 const PIECE_SCENE = preload("res://Piece.tscn") 
-const GRID_STEP = 56.5 # 棋子位置
+const GRID_STEP = 111 # 棋子間距
 @onready var CENTER_POS = get_viewport_rect().size / 2
 
 # --- 遊戲變數 ---
 var board = [] 
-var current_player = 1 # 1: 黑色 (先手), 2: 白色 (後手) 
-var turn_in_round = 0 # 紀錄目前是這一輪的第幾手 (0或1)
+var current_player = 1
+var turn_in_round = 0
 var is_animating = false
 var game_over = false 
 
-# --- 勝利計數變數 ---
-var black_win_count = 0 # 黑方達成連線的計數
+# --- 勝負狀態旗標 ---
+var black_pending_win = false  # 黑方已連四
 
-@onready var board_container = $BoardContainer
-@onready var piece_container = $PieceContainer
+@onready var background_container = $background # 背景節點
+@onready var board_container = $BoardContainer  # 棋盤節點
+@onready var piece_container = $PieceContainer  # 棋子節點
+@onready var result_label = $ResultLabel/label  # 文字節點
 
 func _ready():
-	# 初始化棋盤
 	board_container.position = CENTER_POS
 	piece_container.position = CENTER_POS
+	background_container.position = CENTER_POS
+	result_label.visible = false  # 預設隱藏
 	setup_board_data()
 
-# 初始化/重置陣列資料
 func setup_board_data():
 	board = []
 	for x in range(BOARD_SIZE):
@@ -36,34 +38,41 @@ func setup_board_data():
 
 func _input(event):
 	if is_animating: return
-	
-	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
-		if game_over:
-			reset_game()
-			return
-			
-		var local_pos = piece_container.to_local(event.global_position)
-		var col = int(floor((local_pos.x + (BOARD_SIZE * GRID_STEP) / 2.0) / GRID_STEP))
-		
-		if col >= 0 and col < BOARD_SIZE:
-			drop_piece(col)
 
-# 放置棋子邏輯
+	var pressed_pos: Vector2 = Vector2.ZERO
+	var is_pressed := false
+
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		pressed_pos = event.global_position
+		is_pressed = true
+	elif event is InputEventScreenTouch and event.pressed:
+		pressed_pos = event.position
+		is_pressed = true
+
+	if not is_pressed: return
+
+	if game_over:
+		reset_game()
+		return
+
+	var local_pos = piece_container.to_local(pressed_pos)
+	var col = int(floor((local_pos.x + (BOARD_SIZE * GRID_STEP) / 2.0) / GRID_STEP))
+
+	if col >= 0 and col < BOARD_SIZE:
+		drop_piece(col)
+
 func drop_piece(col):
 	for row in range(BOARD_SIZE - 1, -1, -1):
 		if board[col][row] == 0:
 			board[col][row] = current_player
 			play_drop_animation(col, row, current_player)
 			
-			# 每一步下子後檢查勝負
-			# 傳入當前是誰下子，用來判斷白方是否有「反超獲勝」的機會
 			if check_winner_logic(false):
 				return 
 				
 			next_turn()
 			return
 
-# 播放棋子下落動畫
 func play_drop_animation(col, row, player, start_y_offset = -400):
 	var p = PIECE_SCENE.instantiate()
 	piece_container.add_child(p)
@@ -74,22 +83,20 @@ func play_drop_animation(col, row, player, start_y_offset = -400):
 	var tween = create_tween()
 	tween.tween_property(p, "position:y", target_y, 0.4).set_trans(Tween.TRANS_BOUNCE)
 
-# 切換回合
 func next_turn():
 	turn_in_round += 1
 	current_player = 2 if current_player == 1 else 1
 	
-	# 雙方都下一子後進行旋轉
 	if turn_in_round >= 2:
 		turn_in_round = 0
 		start_rotation_sequence()
 
-# 旋轉流程
+# 旋轉部分
+
 func start_rotation_sequence():
 	is_animating = true
 	await get_tree().create_timer(0.5).timeout
 	
-	# 旋轉矩陣資料 (順時針 90 度)
 	var new_board = []
 	for i in range(BOARD_SIZE):
 		new_board.append([])
@@ -99,7 +106,6 @@ func start_rotation_sequence():
 			new_board[BOARD_SIZE - 1 - y][x] = board[x][y]
 	board = new_board
 
-	# 視覺旋轉動畫
 	var tween = create_tween().set_parallel(true)
 	var target_rot = board_container.rotation + deg_to_rad(90)
 	tween.tween_property(board_container, "rotation", target_rot, 0.8).set_trans(Tween.TRANS_QUINT).set_ease(Tween.EASE_IN_OUT)
@@ -112,7 +118,6 @@ func start_rotation_sequence():
 	await get_tree().create_timer(0.5).timeout
 	apply_gravity_and_animate()
 
-# 處理重力掉落
 func apply_gravity_and_animate():
 	var pre_gravity_board = []
 	for x in range(BOARD_SIZE):
@@ -152,75 +157,116 @@ func apply_gravity_and_animate():
 	
 	await final_tween.finished
 	
-	# 旋轉後檢查勝負
 	check_winner_logic(true)
 	is_animating = false
 
-# 核心勝負判斷 (整合你的最新規則)
-func check_winner_logic(after_rotation: bool) -> bool:
-	var b_reached = check_logic(1) # 黑色連成四子
-	var w_reached = check_logic(2) # 白色連成四子
+func start_warning_flash():# 閃爍
+	var flash = ColorRect.new()
+	add_child(flash)
+	flash.color = Color(1, 0.8, 0, 0.35) 
+	flash.size = get_viewport_rect().size
+	flash.mouse_filter = Control.MOUSE_FILTER_IGNORE  # 不攔截點擊
 	
-	# 規則 A: 翻轉後同時達成四子 = 平手
-	if after_rotation and b_reached and w_reached:
-		game_over = true
-		show_result("DRAW!")
-		return true
+	var tween = create_tween().set_loops(1)  # 閃爍4次
+	tween.tween_property(flash, "modulate:a", 0.0, 0.25)
+	tween.tween_property(flash, "modulate:a", 1.0, 0.25)
+	
+	await tween.finished
+	flash.queue_free()
+	
+func check_winner_logic(after_rotation: bool) -> bool:
+	var b_reached = check_logic(1)
+	var w_reached = check_logic(2)
 
-	# 規則 B: 白色獲勝判定 (在落子階段或翻轉階段，白色只要達成即獲勝)
-	# 這也包含了「黑色落子連四，但白色隨後落子也連四」的情況，因為白色在此處優先判定
-	if w_reached:
-		game_over = true
-		show_result("WHITE WINS!")
-		return true
-
-	# 規則 C: 黑色獲勝判定
-	if b_reached:
-		if after_rotation:
-			# 翻轉後黑色單獨達成直接贏
+	if after_rotation:
+		# 翻轉後：雙方都連四 → 平手
+		if b_reached and w_reached:
+			game_over = true
+			show_result("DRAW!")
+			return true
+		# 翻轉後：任一方單獨連四 → 該方直接獲勝
+		if b_reached:
 			game_over = true
 			show_result("BLACK WINS!")
 			return true
-		else:
-			# 落子階段黑色達成，需要累積計數 (等待白色最後一子)
-			black_win_count += 1
-			if black_win_count >= 2:
-				game_over = true
-				show_result("BLACK WINS!")
-				return true
-			else:
-				print("last chance!")
+		if w_reached:
+			game_over = true
+			show_result("WHITE WINS!")
+			return true
+			
+#	else:
+#		# 落子階段（有白方最後一子版本）
+#		if current_player == 1 and b_reached:
+#			# 黑方落子連四 → 設旗標，讓白方還有最後一子
+#			black_pending_win = true
+#			print("Black connected 4! White gets one last move.")
+#			start_warning_flash()
+#			return false  # 遊戲繼續，不結束
+#		if current_player == 2:
+#			if w_reached:
+#				# 白方落子連四（不管 black_pending_win，白方連四就是白方贏）
+#				game_over = true
+#				show_result("WHITE WINS!")
+#				return true
+#			elif black_pending_win:
+#				# 白方用完最後一子但沒連四，黑方獲勝
+#				game_over = true
+#				show_result("BLACK WINS!")
+#				return true
+	else:
+		# 落子階段（無白方最後一子版本）
+		if b_reached:
+			game_over = true
+			show_result("BLACK WINS!")
+			return true
+		if w_reached:
+			game_over = true
+			show_result("WHITE WINS!")
+			return true
 
-	# 規則 D: 棋盤滿格判定
+	# 棋盤滿格
 	var is_full = true
 	for x in range(BOARD_SIZE):
-		if board[x][0] == 0: is_full = false
+		if board[x][0] == 0:
+			is_full = false
+			break
 	if is_full:
 		game_over = true
 		show_result("DRAW!")
 		return true
-		
+
 	return false
 
-func show_result(text):
+func show_result(text: String):
 	print(text)
-
+	result_label.text = text
+	
+	if text == "BLACK WINS!":
+		result_label.add_theme_color_override("font_color", Color.BLACK)
+	elif text == "WHITE WINS!":
+		result_label.add_theme_color_override("font_color", Color.WHITE)
+	else:
+		result_label.add_theme_color_override("font_color", Color.GRAY)
+	
+	result_label.visible = true
+	
 func reset_game():
 	print("Resetting game...")
 	game_over = false
 	current_player = 1
 	turn_in_round = 0
 	is_animating = false
-	black_win_count = 0
+	black_pending_win = false  # 重置旗標
 	
 	setup_board_data()
 	for child in piece_container.get_children():
 		child.queue_free()
+	
+	result_label.visible = false  # 隱藏結果文字
 		
 	var tween = create_tween()
 	tween.tween_property(board_container, "rotation", 0, 0.5).set_trans(Tween.TRANS_SINE)
 
-# 掃描邏輯
 func check_logic(p_id):
 	for x in range(BOARD_SIZE):
 		for y in range(BOARD_SIZE):
