@@ -7,11 +7,12 @@ const GRID_STEP = 111 # 棋子間距
 @onready var CENTER_POS = get_viewport_rect().size / 2
 
 # --- 遊戲變數 ---
-var board = [] 
+var board = []
+var pieces_grid = []  # pieces_grid[col][row] = Sprite2D node
 var current_player = 1
 var turn_in_round = 0
 var is_animating = false
-var game_over = false 
+var game_over = false
 
 # --- 勝負狀態旗標 ---
 var black_pending_win = false  # 黑方已連四
@@ -22,7 +23,7 @@ var black_pending_win = false  # 黑方已連四
 @onready var result_label = $ResultLabel/label  # 文字節點
 
 func _ready():
-	board_container.position = CENTER_POS
+	board_container.position = CENTER_POS       # 設定位置至中
 	piece_container.position = CENTER_POS
 	background_container.position = CENTER_POS
 	result_label.visible = false  # 預設隱藏
@@ -30,11 +31,15 @@ func _ready():
 
 func setup_board_data():
 	board = []
+	pieces_grid = []
 	for x in range(BOARD_SIZE):
 		var col = []
+		var piece_col = []
 		for y in range(BOARD_SIZE):
 			col.append(0)
+			piece_col.append(null)
 		board.append(col)
+		pieces_grid.append(piece_col)
 
 func _input(event):
 	if is_animating: return
@@ -77,6 +82,7 @@ func play_drop_animation(col, row, player, start_y_offset = -400):
 	var p = PIECE_SCENE.instantiate()
 	piece_container.add_child(p)
 	p.set_piece_type(player)
+	pieces_grid[col][row] = p
 	var target_x = (col - BOARD_SIZE / 2.0 + 0.5) * GRID_STEP
 	var target_y = (row - BOARD_SIZE / 2.0 + 0.5) * GRID_STEP
 	p.position = Vector2(target_x, start_y_offset)
@@ -135,7 +141,11 @@ func apply_gravity_and_animate():
 	for child in piece_container.get_children():
 		child.queue_free()
 	await get_tree().process_frame
-	
+
+	for x in range(BOARD_SIZE):
+		for y in range(BOARD_SIZE):
+			pieces_grid[x][y] = null
+
 	var final_tween = create_tween().set_parallel(true)
 	for x in range(BOARD_SIZE):
 		var original_y_positions = []
@@ -149,6 +159,7 @@ func apply_gravity_and_animate():
 				var p = PIECE_SCENE.instantiate()
 				piece_container.add_child(p)
 				p.set_piece_type(board[x][y])
+				pieces_grid[x][y] = p
 				var final_x = (x - BOARD_SIZE / 2.0 + 0.5) * GRID_STEP
 				var final_y = (y - BOARD_SIZE / 2.0 + 0.5) * GRID_STEP
 				p.position = Vector2(final_x, original_y_positions[current_p_count])
@@ -182,15 +193,19 @@ func check_winner_logic(after_rotation: bool) -> bool:
 		# 翻轉後：雙方都連四 → 平手
 		if b_reached and w_reached:
 			game_over = true
+			highlight_winning_pieces(1)
+			highlight_winning_pieces(2)
 			show_result("DRAW!")
 			return true
 		# 翻轉後：任一方單獨連四 → 該方直接獲勝
 		if b_reached:
 			game_over = true
+			highlight_winning_pieces(1)
 			show_result("BLACK WINS!")
 			return true
 		if w_reached:
 			game_over = true
+			highlight_winning_pieces(2)
 			show_result("WHITE WINS!")
 			return true
 			
@@ -217,10 +232,12 @@ func check_winner_logic(after_rotation: bool) -> bool:
 		# 落子階段（無白方最後一子版本）
 		if b_reached:
 			game_over = true
+			highlight_winning_pieces(1)
 			show_result("BLACK WINS!")
 			return true
 		if w_reached:
 			game_over = true
+			highlight_winning_pieces(2)
 			show_result("WHITE WINS!")
 			return true
 
@@ -256,7 +273,7 @@ func reset_game():
 	current_player = 1
 	turn_in_round = 0
 	is_animating = false
-	black_pending_win = false  # 重置旗標
+	# black_pending_win = false  # 重置旗標
 	
 	setup_board_data()
 	for child in piece_container.get_children():
@@ -285,3 +302,43 @@ func check_dir(x, y, dx, dy, p_id):
 			else: break
 		else: break
 	return count == 4
+
+func highlight_winning_pieces(p_id):
+	# 取得勝利格子後，對每個格子的棋子節點呼叫 start_glow()
+	var cells = get_winning_cells(p_id)
+	for cell in cells:
+		var piece = pieces_grid[cell.x][cell.y]
+		if piece and is_instance_valid(piece):
+			piece.start_glow()
+
+func get_winning_cells(p_id) -> Array:
+	# 掃描棋盤，找出所有屬於連四（或以上）的格子座標
+	# 使用 dict 去重，避免同一格被多條連線重複加入
+	var winning = {}
+	for x in range(BOARD_SIZE):
+		for y in range(BOARD_SIZE):
+			if board[x][y] == p_id:
+				for d in [[1,0],[0,1],[1,1],[1,-1]]:
+					var dx = d[0]
+					var dy = d[1]
+					# 只從每段連線的起點開始，避免同一段被反覆收集
+					var px = x - dx
+					var py = y - dy
+					var is_start = (px < 0 or px >= BOARD_SIZE or py < 0 or py >= BOARD_SIZE or board[px][py] != p_id)
+					if is_start:
+						var cells = get_run_cells(x, y, dx, dy, p_id)
+						if cells.size() >= 4:
+							for c in cells:
+								winning[c] = true
+	return winning.keys()
+
+func get_run_cells(x, y, dx, dy, p_id) -> Array:
+	# 從 (x,y) 起沿 (dx,dy) 方向收集連續同色格子，直到邊界或不同色為止
+	var cells = []
+	var cx = x
+	var cy = y
+	while cx >= 0 and cx < BOARD_SIZE and cy >= 0 and cy < BOARD_SIZE and board[cx][cy] == p_id:
+		cells.append(Vector2i(cx, cy))
+		cx += dx
+		cy += dy
+	return cells
