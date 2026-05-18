@@ -14,6 +14,11 @@ var turn_in_round = 0
 var is_animating = false
 var game_over = false
 
+# --- Undo / Redo ---
+var piece_counter = 0  # 每次落子遞增，追蹤棋子總數
+var undo_stack = []    # 每個動作前的快照
+var redo_stack = []    # 被 undo 的動作，供 redo 使用
+
 # --- 勝負狀態旗標 ---
 var black_pending_win = false  # 黑方已連四
 
@@ -40,8 +45,28 @@ func setup_board_data():
 			piece_col.append(null)
 		board.append(col)
 		pieces_grid.append(piece_col)
+	piece_counter = 0  # 重置棋子計數
+	undo_stack = []    # 清空 undo 歷史
+	redo_stack = []    # 清空 redo 歷史
 
 func _input(event):
+	if event is InputEventKey and event.pressed and not event.echo:  # 鍵盤單次按下
+		if event.keycode == KEY_Z or event.keycode == KEY_LEFT:  # Z / 左方向鍵：上一步
+			perform_undo()
+			return
+		if event.keycode == KEY_Y or event.keycode == KEY_RIGHT:  # Y / 右方向鍵：下一步
+			perform_redo()
+			return
+		# 數字鍵 1~6：落子至對應欄
+		var col_key_map = {
+			KEY_1: 0, KEY_2: 1, KEY_3: 2,
+			KEY_4: 3, KEY_5: 4, KEY_6: 5
+		}
+		if event.keycode in col_key_map:
+			if not is_animating and not game_over:
+				drop_piece(col_key_map[event.keycode])
+			return
+
 	if is_animating: return
 
 	var pressed_pos: Vector2 = Vector2.ZERO
@@ -67,8 +92,21 @@ func _input(event):
 		drop_piece(col)
 
 func drop_piece(col):
+	# 若最近一次 undo 的是旋轉，必須先把兩顆子都 undo 後才能下子
+	if not redo_stack.is_empty() and redo_stack.back()["type"] == "rotate":
+		return
 	for row in range(BOARD_SIZE - 1, -1, -1):
 		if board[col][row] == 0:
+			undo_stack.push_back({  # 落子前存快照
+				"type": "drop",
+				"col": col,
+				"row": row,
+				"player": current_player,        # 落子的玩家
+				"player_before": current_player, # undo 後要還原的玩家
+				"turn_before": turn_in_round     # undo 後要還原的回合數
+			})
+			redo_stack.clear()  # 新動作發生，清除 redo 歷史
+			piece_counter += 1  # 棋子編號遞增
 			board[col][row] = current_player
 			play_drop_animation(col, row, current_player)
 			
@@ -87,7 +125,9 @@ func play_drop_animation(col, row, player, start_y_offset = -400):
 	var target_y = (row - BOARD_SIZE / 2.0 + 0.5) * GRID_STEP
 	p.position = Vector2(target_x, start_y_offset)
 	var tween = create_tween()
-	tween.tween_property(p, "position:y", target_y, 0.4).set_trans(Tween.TRANS_BOUNCE)
+	tween.tween_property(p, "position:y", target_y + 15, 0.30).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)  # 落子時間和彈跳高度(向下)
+	tween.tween_property(p, "position:y", target_y - 20, 0.09).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT) # 彈跳高度(向上)
+	tween.tween_property(p, "position:y", target_y, 0.07).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)       # 回彈時間
 
 func next_turn():
 	turn_in_round += 1
@@ -99,7 +139,18 @@ func next_turn():
 
 # 旋轉部分
 
-func start_rotation_sequence():
+func start_rotation_sequence(save_undo = true):  # save_undo=false 供 redo 呼叫時使用
+	if save_undo:  # 正常遊戲流程才存快照，redo 時不重複存
+		var board_copy = []  # 深拷貝旋轉前的盤面
+		for x in range(BOARD_SIZE):
+			board_copy.append(board[x].duplicate())
+		undo_stack.push_back({
+			"type": "rotate",
+			"board_before": board_copy,                    # 旋轉前盤面
+			"rotation_before": board_container.rotation,  # 旋轉前的視覺角度
+			"player_before": current_player,              # 旋轉前的玩家
+			"turn_before": turn_in_round                  # 旋轉前的回合數
+		})
 	is_animating = true
 	await get_tree().create_timer(0.5).timeout
 	
@@ -121,7 +172,7 @@ func start_rotation_sequence():
 		tween.tween_property(child, "position", new_pos, 0.8).set_trans(Tween.TRANS_QUINT).set_ease(Tween.EASE_IN_OUT)
 	
 	await tween.finished
-	await get_tree().create_timer(0.5).timeout
+	await get_tree().create_timer(0.3).timeout # 旋轉緩衝時間
 	apply_gravity_and_animate()
 
 func apply_gravity_and_animate():
@@ -138,15 +189,15 @@ func apply_gravity_and_animate():
 		for i in range(pieces.size()):
 			board[x][BOARD_SIZE - 1 - i] = pieces[pieces.size() - 1 - i]
 	
-	for child in piece_container.get_children():
-		child.queue_free()
-	await get_tree().process_frame
+	var old_children = piece_container.get_children()
 
 	for x in range(BOARD_SIZE):
 		for y in range(BOARD_SIZE):
 			pieces_grid[x][y] = null
 
-	var final_tween = create_tween().set_parallel(true)
+	var drop_pieces = []  # 記錄每顆棋子與其目標 Y，供後續彈跳使用
+
+	var fall_tween = create_tween().set_parallel(true)
 	for x in range(BOARD_SIZE):
 		var original_y_positions = []
 		for y in range(BOARD_SIZE):
@@ -163,10 +214,26 @@ func apply_gravity_and_animate():
 				var final_x = (x - BOARD_SIZE / 2.0 + 0.5) * GRID_STEP
 				var final_y = (y - BOARD_SIZE / 2.0 + 0.5) * GRID_STEP
 				p.position = Vector2(final_x, original_y_positions[current_p_count])
-				final_tween.tween_property(p, "position:y", final_y, 0.5).set_trans(Tween.TRANS_BOUNCE)
+				fall_tween.tween_property(p, "position:y", final_y + 10, 0.3).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN) # 下落時間
+				drop_pieces.append({"piece": p, "target_y": final_y})
 				current_p_count += 1
-	
-	await final_tween.finished
+
+	# 新棋子已建立後才刪除舊棋子，確保同一幀內無空白間隙
+	for child in old_children:
+		child.hide()
+		child.queue_free()
+
+	await fall_tween.finished
+
+	var bounce_tween = create_tween().set_parallel(true)
+	for item in drop_pieces:
+		bounce_tween.tween_property(item["piece"], "position:y", item["target_y"] - 6, 0.09).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	await bounce_tween.finished
+
+	var settle_tween = create_tween().set_parallel(true)
+	for item in drop_pieces:
+		settle_tween.tween_property(item["piece"], "position:y", item["target_y"], 0.07).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	await settle_tween.finished
 	
 	check_winner_logic(true)
 	is_animating = false
@@ -342,3 +409,158 @@ func get_run_cells(x, y, dx, dy, p_id) -> Array:
 		cx += dx
 		cy += dy
 	return cells
+
+# --- Undo / Redo 系統 ---
+
+func _clear_game_over():  # undo 時如果遊戲已結束，清除勝負狀態
+	if not game_over:
+		return
+	game_over = false
+	result_label.visible = false  # 隱藏勝負文字
+	for child in piece_container.get_children():  # 停止所有棋子的勝利閃爍
+		child.stop_glow()
+
+func perform_undo():
+	if is_animating or undo_stack.is_empty():  # 動畫中或沒有歷史則不執行
+		return
+
+	_clear_game_over()  # 若遊戲結束也允許 undo
+
+	var entry = undo_stack.pop_back()  # 取出最後一筆快照
+	redo_stack.push_back(entry)        # 推入 redo 堆疊供之後還原
+	is_animating = true
+
+	if entry["type"] == "drop":
+		current_player = entry["player_before"]  # 還原玩家
+		turn_in_round = entry["turn_before"]      # 還原回合數
+		piece_counter -= 1                         # 棋子數量回退
+
+		var col = entry["col"]
+		var row = entry["row"]
+		var piece = pieces_grid[col][row]  # 取得要移除的棋子節點
+		pieces_grid[col][row] = null       # 清除格子記錄
+		board[col][row] = 0                # 清除盤面資料
+
+		# 棋子上升飛出動畫（落子動畫反過來）
+		var tween = create_tween()
+		tween.tween_property(piece, "position:y", -500.0, 0.35).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		await tween.finished
+		piece.queue_free()  # 動畫結束後移除節點
+		is_animating = false
+
+	elif entry["type"] == "rotate":
+		current_player = entry["player_before"]  # 還原玩家
+		turn_in_round = entry["turn_before"]      # 還原回合數
+
+		# 重建「旋轉後、重力前」的盤面，以取得每格正確的 pre-gravity Y 位置
+		var post_rot_board = []
+		for i in range(BOARD_SIZE):
+			var col_data = []
+			for j in range(BOARD_SIZE):
+				col_data.append(0)
+			post_rot_board.append(col_data)
+		for x in range(BOARD_SIZE):
+			for y in range(BOARD_SIZE):
+				if entry["board_before"][x][y] != 0:
+					post_rot_board[BOARD_SIZE - 1 - y][x] = entry["board_before"][x][y]
+
+		# === 第一階段：反重力動畫 ===
+		# 棋子從重力後位置上升回「旋轉後、重力前」的正確位置
+		var phase1 = create_tween().set_parallel(true)
+		for c in range(BOARD_SIZE):
+			# 收集該欄在重力前（旋轉後）的 Y 位置，由上到下順序
+			var pre_grav_ys = []
+			for r in range(BOARD_SIZE):
+				if post_rot_board[c][r] != 0:
+					pre_grav_ys.append((r - BOARD_SIZE / 2.0 + 0.5) * GRID_STEP)
+
+			var piece_idx = 0
+			for r in range(BOARD_SIZE):
+				if board[c][r] != 0 and pieces_grid[c][r] != null:
+					phase1.tween_property(pieces_grid[c][r], "position:y", pre_grav_ys[piece_idx], 0.4).set_trans(Tween.TRANS_QUINT).set_ease(Tween.EASE_IN_OUT)
+					piece_idx += 1
+
+		await phase1.finished  # 等待第一階段結束
+		await get_tree().create_timer(0.3).timeout  # 到達正確位置後等待 0.3 秒再旋轉
+
+		# === 第二階段：反向旋轉動畫 ===
+		# 還原盤面資料（旋轉前的快照）
+		board = []
+		for x in range(BOARD_SIZE):
+			board.append(entry["board_before"][x].duplicate())
+
+		# 重置 pieces_grid
+		for x in range(BOARD_SIZE):
+			for y in range(BOARD_SIZE):
+				pieces_grid[x][y] = null
+
+		# 刪除第一階段的棋子，用 board_before 重建（起始位置與第一階段結束位置相同，視覺上不跳動）
+		var old_phase1_children = piece_container.get_children()
+
+		var piece_nodes = []  # 按 (x,y) 順序記錄新建的棋子節點
+		var tween = create_tween().set_parallel(true)
+		tween.tween_property(board_container, "rotation", entry["rotation_before"], 0.8).set_trans(Tween.TRANS_QUINT).set_ease(Tween.EASE_IN_OUT)  # board 反向旋轉
+
+		for x in range(BOARD_SIZE):
+			for y in range(BOARD_SIZE):
+				if board[x][y] != 0:
+					var p = PIECE_SCENE.instantiate()
+					piece_container.add_child(p)
+					p.set_piece_type(board[x][y])
+					piece_nodes.append(p)
+
+					var pre_x = (x - BOARD_SIZE / 2.0 + 0.5) * GRID_STEP  # 旋轉前的 X 位置
+					var pre_y = (y - BOARD_SIZE / 2.0 + 0.5) * GRID_STEP  # 旋轉前的 Y 位置
+					p.position = Vector2(-pre_y, pre_x)  # 起始：旋轉後重力前的位置（第一階段結束位置）
+					tween.tween_property(p, "position", Vector2(pre_x, pre_y), 0.8).set_trans(Tween.TRANS_QUINT).set_ease(Tween.EASE_IN_OUT)  # 反向旋轉動畫
+
+		# 新棋子已建立後才刪除舊棋子，確保同一幀內無空白間隙
+		for child in old_phase1_children:
+			child.hide()
+			child.queue_free()
+
+		await tween.finished
+
+		# 將棋子節點對應回 pieces_grid（按相同的 x,y 迭代順序）
+		var idx = 0
+		for x in range(BOARD_SIZE):
+			for y in range(BOARD_SIZE):
+				if board[x][y] != 0:
+					pieces_grid[x][y] = piece_nodes[idx]
+					idx += 1
+
+		is_animating = false
+
+func perform_redo():
+	if is_animating or redo_stack.is_empty():  # 動畫中或沒有 redo 歷史則不執行
+		return
+
+	var entry = redo_stack.pop_back()  # 取出最後一筆 redo 快照
+	undo_stack.push_back(entry)         # 推回 undo 堆疊
+	is_animating = true
+
+	if entry["type"] == "drop":
+		var col = entry["col"]
+		var row = entry["row"]
+		var player = entry["player"]
+
+		piece_counter += 1           # 棋子數量前進
+		board[col][row] = player     # 更新盤面資料
+		play_drop_animation(col, row, player)  # 播放落子動畫
+
+		# 計算 next_turn 後的狀態（不觸發旋轉，旋轉有獨立的 redo 項目）
+		var new_turn = entry["turn_before"] + 1
+		var new_player = 3 - player  # 1→2 或 2→1
+		if new_turn >= 2:
+			new_turn = 0  # 對應 next_turn() 裡的重置，但旋轉由 redo 旋轉項目處理
+		current_player = new_player
+		turn_in_round = new_turn
+
+		await get_tree().create_timer(0.5).timeout  # 等落子動畫結束（0.4s + 緩衝）
+		check_winner_logic(false)  # 落子後檢查勝負
+		is_animating = false
+
+	elif entry["type"] == "rotate":
+		# 盤面已由 undo 還原到旋轉前狀態，直接重跑旋轉流程
+		start_rotation_sequence(false)  # false = 不重複存入 undo_stack
+		# is_animating 會由 apply_gravity_and_animate 內部設回 false
