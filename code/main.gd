@@ -229,17 +229,20 @@ func apply_gravity_and_animate():
 		child.hide()
 		child.queue_free()
 
-	await fall_tween.finished
+	if not drop_pieces.is_empty():
+		await fall_tween.finished
 
-	var bounce_tween = create_tween().set_parallel(true)
-	for item in drop_pieces:
-		bounce_tween.tween_property(item["piece"], "position:y", item["target_y"] - 6, 0.09).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	await bounce_tween.finished
+		var bounce_tween = create_tween().set_parallel(true)
+		for item in drop_pieces:
+			bounce_tween.tween_property(item["piece"], "position:y", item["target_y"] - 6, 0.09).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		await bounce_tween.finished
 
-	var settle_tween = create_tween().set_parallel(true)
-	for item in drop_pieces:
-		settle_tween.tween_property(item["piece"], "position:y", item["target_y"], 0.07).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
-	await settle_tween.finished
+		var settle_tween = create_tween().set_parallel(true)
+		for item in drop_pieces:
+			settle_tween.tween_property(item["piece"], "position:y", item["target_y"], 0.07).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		await settle_tween.finished
+	else:
+		fall_tween.kill()
 	
 	check_winner_logic(true)
 	is_animating = false
