@@ -14,9 +14,9 @@ func set_piece_type(pid):
 
 func start_glow():
 	# 勝利時呼叫：
-	var glow_color = Color(2.048, 1.982, 0.526, 1.0) if player_id == 1 else Color(2.048, 0.531, 0.041, 1.0)
+	var glow_color = Color(2.048, 1.982, 0.526, 1.0) if player_id == 1 else Color(1.461, 0.568, 0.0, 1.0)
 	# Color(2.048, 0.531, 0.041, 1.0) 白色方
-	# Color(1.899, 1.352, 0.485, 1.0) 白色方
+	# Color(1.579, 0.617, 0.0, 1.0) 白色方
 	# Color(2.048, 1.982, 0.526, 1.0) 黑色方
 	# Color(0.3, 0.85, 1.0, 1.0)      黑色方
 	_glow_tween = create_tween().set_loops()  # 改用 _glow_tween 追蹤，方便外部停止
