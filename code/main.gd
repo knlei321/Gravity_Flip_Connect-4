@@ -28,10 +28,13 @@ var black_pending_win = false  # 黑方已連四
 @onready var result_label = $ResultLabel/label  # 文字節點
 
 func _ready():
-	board_container.position = CENTER_POS       # 設定位置至中
+	board_container.position = CENTER_POS
 	piece_container.position = CENTER_POS
 	background_container.position = CENTER_POS
-	result_label.visible = false  # 預設隱藏
+	result_label.visible = false
+	var vp = get_viewport_rect().size
+	var tex = background_container.texture.get_size()
+	background_container.scale = Vector2(vp.x / tex.x, vp.y / tex.y)
 	setup_board_data()
 
 func setup_board_data():
