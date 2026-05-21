@@ -2,9 +2,9 @@ extends Node2D
 
 # --- 常數與設定 ---
 const BOARD_SIZE = 6
-const PIECE_SCENE = preload("res://Piece.tscn") 
+const PIECE_SCENE = preload("res://piece.tscn")
 const GRID_STEP = 111 # 棋子間距
-@onready var CENTER_POS = get_viewport_rect().size / 2
+var CENTER_POS: Vector2
 
 # --- 遊戲變數 ---
 var board = []
@@ -27,7 +27,12 @@ var black_pending_win = false  # 黑方已連四
 @onready var piece_container = $PieceContainer  # 棋子節點
 @onready var result_label = $ResultLabel/label  # 文字節點
 
+var _space_reset: Node
+
 func _ready():
+	DisplayServer.window_set_ime_active(false)
+	await get_tree().process_frame
+	CENTER_POS = get_viewport_rect().size / 2   # 固定場景中間
 	board_container.position = CENTER_POS
 	piece_container.position = CENTER_POS
 	background_container.position = CENTER_POS
@@ -36,6 +41,9 @@ func _ready():
 	var tex = background_container.texture.get_size()
 	background_container.scale = Vector2(vp.x / tex.x, vp.y / tex.y)
 	setup_board_data()
+	_space_reset = preload("res://code/space_reset.gd").new()
+	add_child(_space_reset)
+	_space_reset.setup(self)
 
 func setup_board_data():
 	board = []
@@ -54,10 +62,13 @@ func setup_board_data():
 
 func _input(event):
 	if event is InputEventKey and event.pressed and not event.echo:  # 鍵盤單次按下
-		if event.keycode == KEY_Z or event.keycode == KEY_LEFT:  # Z / 左方向鍵：上一步
+		if event.physical_keycode == KEY_ENTER and game_over:  # Enter：勝負後重置
+			reset_game()
+			return
+		if event.physical_keycode == KEY_Z or event.physical_keycode == KEY_LEFT:  # Z / 左方向鍵：上一步
 			perform_undo()
 			return
-		if event.keycode == KEY_Y or event.keycode == KEY_RIGHT:  # Y / 右方向鍵：下一步
+		if event.physical_keycode == KEY_Y or event.physical_keycode == KEY_RIGHT:  # Y / 右方向鍵：下一步
 			perform_redo()
 			return
 		# 數字鍵 1~6：落子至對應欄
@@ -65,9 +76,9 @@ func _input(event):
 			KEY_1: 0, KEY_2: 1, KEY_3: 2,
 			KEY_4: 3, KEY_5: 4, KEY_6: 5
 		}
-		if event.keycode in col_key_map:
+		if event.physical_keycode in col_key_map:
 			if not is_animating and not game_over:
-				drop_piece(col_key_map[event.keycode])
+				drop_piece(col_key_map[event.physical_keycode])
 			return
 
 	if is_animating: return
@@ -347,6 +358,7 @@ func show_result(text: String):
 	result_label.visible = true
 	
 func reset_game():
+	_space_reset.cleanup()
 	print("Resetting game...")
 	game_over = false
 	current_player = 1
