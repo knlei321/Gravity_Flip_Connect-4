@@ -938,9 +938,11 @@ func _show_color_select() -> void:
 			if black_row < 3:
 				for col in range(MENU_COLS):
 					row_labels[black_row][col].text = COLOR_WORDS[black_row][col]
+					row_labels[black_row][col].add_theme_color_override("font_color", Color.WHITE)
 			elif black_row == 3:
 				for col in range(MENU_COLS):
 					row_labels[black_row][col].text = " "
+					row_labels[black_row][col].add_theme_color_override("font_color", Color.WHITE)
 
 		var gray_row := wave_row + 1
 		if gray_row < BOARD_SIZE:
@@ -964,6 +966,7 @@ func _show_color_select() -> void:
 				pieces_grid[col][row].modulate = Color(0.45, 0.45, 0.45)
 		for col in range(MENU_COLS):
 			row_labels[row][col].text = COLOR_WORDS[row][col]
+			row_labels[row][col].add_theme_color_override("font_color", Color.WHITE)
 
 	# 左下角 < 返回按鈕
 	var vp  := get_viewport_rect().size
