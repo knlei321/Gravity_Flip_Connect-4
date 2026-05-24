@@ -42,10 +42,21 @@ var _pause_menu: Node
 var _audio: Node
 var in_menu := true
 
-var _undo_label: Label = null
-var _redo_label: Label = null
-var _undo_rect: Rect2  = Rect2()
-var _redo_rect: Rect2  = Rect2()
+var _undo_label:      Label = null
+var _redo_label:      Label = null
+var _pause_btn_label: Label = null
+var _undo_rect:     Rect2 = Rect2()
+var _redo_rect:     Rect2 = Rect2()
+var _pause_btn_rect: Rect2 = Rect2()
+
+var is_ai_mode    := false
+var ai_difficulty := 0
+var ai_player     := 2   # AI = white, human = black
+var _ai: Node     = null
+
+var _ai_thread:        Thread = null
+var _ai_result:        int    = -1
+var _thinking_spinner: Node   = null
 
 func _ready():
 	DisplayServer.window_set_ime_active(false)
@@ -64,18 +75,32 @@ func _ready():
 	piece_container.hide()
 	var menu = $MenuContainer
 	menu.game_started.connect(_on_game_started)
+	menu.ai_game_started.connect(_on_ai_game_started)
 	menu.initialize(CENTER_POS)
 
 func _on_game_started() -> void:
+	_start_game_impl()
+
+func _on_ai_game_started(difficulty: int, human_player: int) -> void:
+	is_ai_mode    = true
+	ai_difficulty = difficulty
+	ai_player     = 3 - human_player  # 人類選黑(1)→AI白(2)，人類選白(2)→AI黑(1)
+	_start_game_impl()
+
+func _start_game_impl() -> void:
 	in_menu = false
 	$MenuContainer.hide()
 	board_container.show()
 	piece_container.show()
 	setup_board_data()
+	if is_ai_mode:
+		_ai = preload("res://code/ai.gd").new()
+		add_child(_ai)
 	_pause_menu = preload("res://code/pause_menu.gd").new()
 	add_child(_pause_menu)
 	_pause_menu.setup(self)
 	_create_game_ui()
+	_schedule_ai_move()  # AI 先手時（選白色）立刻觸發
 
 func setup_board_data():
 	board = []
@@ -102,12 +127,13 @@ func _input(event):
 		if event.physical_keycode == KEY_ENTER and game_over:  # Enter：勝負後重置
 			reset_game()
 			return
-		if event.physical_keycode == KEY_Z or event.physical_keycode == KEY_LEFT:  # Z / 左方向鍵：上一步
+		if event.physical_keycode == KEY_Z or event.physical_keycode == KEY_LEFT:
 			perform_undo()
 			return
-		if event.physical_keycode == KEY_Y or event.physical_keycode == KEY_RIGHT:  # Y / 右方向鍵：下一步
+		if event.physical_keycode == KEY_Y or event.physical_keycode == KEY_RIGHT:
 			perform_redo()
 			return
+
 		# 數字鍵 1~6：落子至對應欄
 		var col_key_map = {
 			KEY_1: 0, KEY_2: 1, KEY_3: 2,
@@ -117,8 +143,6 @@ func _input(event):
 			if not is_animating and not game_over:
 				drop_piece(col_key_map[event.physical_keycode])
 			return
-
-	if is_animating: return
 
 	var pressed_pos: Vector2 = Vector2.ZERO
 	var is_pressed := false
@@ -131,6 +155,12 @@ func _input(event):
 		is_pressed = true
 
 	if not is_pressed: return
+
+	if _pause_btn_rect.has_point(pressed_pos):
+		_pause_menu.toggle()
+		return
+
+	if is_animating: return
 
 	if _undo_rect.has_point(pressed_pos):
 		perform_undo()
@@ -176,6 +206,7 @@ func drop_piece(col):
 				return
 
 			next_turn()
+			_schedule_ai_move()
 			return
 
 func play_drop_animation(col, row, player, start_y_offset = -400) -> Tween:
@@ -308,6 +339,7 @@ func apply_gravity_and_animate():
 	
 	check_winner_logic(true)
 	is_animating = false
+	_schedule_ai_move()
 
 func start_warning_flash():# 閃爍
 	var flash = ColorRect.new()
@@ -412,6 +444,16 @@ func return_to_menu() -> void:
 		_pause_menu.cleanup()
 		_pause_menu.queue_free()
 		_pause_menu = null
+	_hide_ai_thinking()
+	if _ai_thread != null:
+		_ai_thread.wait_to_finish()
+		_ai_thread = null
+	_ai_result = -1
+	if is_instance_valid(_ai):
+		_ai.queue_free()
+	_ai           = null
+	is_ai_mode    = false
+	ai_difficulty = 0
 	game_over     = false
 	in_menu       = true
 	is_animating  = false
@@ -423,10 +465,13 @@ func return_to_menu() -> void:
 	board_container.rotation = 0.0
 	board_container.hide()
 	piece_container.hide()
-	if is_instance_valid(_undo_label): _undo_label.queue_free()
-	if is_instance_valid(_redo_label): _redo_label.queue_free()
-	_undo_label = null
-	_redo_label = null
+	if is_instance_valid(_undo_label):      _undo_label.queue_free()
+	if is_instance_valid(_redo_label):      _redo_label.queue_free()
+	if is_instance_valid(_pause_btn_label): _pause_btn_label.queue_free()
+	_undo_label      = null
+	_redo_label      = null
+	_pause_btn_label = null
+	_pause_btn_rect  = Rect2()
 	$MenuContainer.show()
 	$MenuContainer.reinitialize(CENTER_POS)
 
@@ -444,7 +489,8 @@ func reset_game():
 		child.queue_free()
 
 	result_label.visible = false  # 隱藏結果文字
-		
+	_schedule_ai_move()  # AI 先手時 reset 後重新觸發
+
 	if absf(board_container.rotation) > 0.01:
 		_audio.play_rotation(0.5)
 	var tween = create_tween()
@@ -548,6 +594,8 @@ func perform_undo():
 		piece.queue_free()  # 動畫結束後移除節點
 		_update_undo_redo_ui()
 		is_animating = false
+		if is_ai_mode and current_player == ai_player and not undo_stack.is_empty():
+			await perform_undo()
 
 	elif entry["type"] == "rotate":
 		current_player = entry["player_before"]  # 還原玩家
@@ -634,6 +682,8 @@ func perform_undo():
 
 		_update_undo_redo_ui()
 		is_animating = false
+		if is_ai_mode and current_player == ai_player and not undo_stack.is_empty():
+			await perform_undo()
 
 func perform_redo():
 	if is_animating or redo_stack.is_empty():  # 動畫中或沒有 redo 歷史則不執行
@@ -664,6 +714,7 @@ func perform_redo():
 		check_winner_logic(false)  # 落子後檢查勝負
 		_update_undo_redo_ui()
 		is_animating = false
+		_schedule_ai_move()
 
 	elif entry["type"] == "rotate":
 		# 盤面已由 undo 還原到旋轉前狀態，直接重跑旋轉流程
@@ -679,7 +730,7 @@ func _create_game_ui() -> void:
 	var btn_w     := vp.x * 0.10
 	var btn_h     := vp.y * 0.10
 	var margin    := vp.x * 0.015
-	var btn_y     := CENTER_POS.y + (BOARD_SIZE / 2.0 - 0.5) * GRID_STEP - btn_h * 0.5
+	var btn_y     := CENTER_POS.y + (BOARD_SIZE / 2.0 - 0.5) * GRID_STEP - btn_h * 0.5 + GRID_STEP * 0.30
 
 	_undo_label = Label.new()
 	_undo_label.text = "<<"
@@ -709,6 +760,23 @@ func _create_game_ui() -> void:
 	add_child(_redo_label)
 	_redo_rect = Rect2(Vector2(vp.x - btn_w - margin, btn_y), Vector2(btn_w, btn_h))
 
+	var pause_x := vp.x - btn_w - margin
+	var pause_y := CENTER_POS.y + (-BOARD_SIZE / 2.0 + 0.5) * GRID_STEP - btn_h * 0.5 - GRID_STEP * 0.30
+	_pause_btn_label = Label.new()
+	_pause_btn_label.text = "||"
+	_pause_btn_label.add_theme_font_override("font", font)
+	_pause_btn_label.add_theme_font_size_override("font_size", sz)
+	_pause_btn_label.add_theme_color_override("font_color", Color.WHITE)
+	_pause_btn_label.add_theme_constant_override("outline_size", 2)
+	_pause_btn_label.add_theme_color_override("font_outline_color", Color.BLACK)
+	_pause_btn_label.size                 = Vector2(btn_w, btn_h)
+	_pause_btn_label.position             = Vector2(pause_x, pause_y)
+	_pause_btn_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_pause_btn_label.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
+	_pause_btn_label.mouse_filter         = Control.MOUSE_FILTER_IGNORE
+	add_child(_pause_btn_label)
+	_pause_btn_rect = Rect2(Vector2(pause_x, pause_y), Vector2(btn_w, btn_h))
+
 	_update_undo_redo_ui()
 
 
@@ -717,3 +785,51 @@ func _update_undo_redo_ui() -> void:
 		_undo_label.modulate.a = 1.0 if not undo_stack.is_empty() else 0.25
 	if is_instance_valid(_redo_label):
 		_redo_label.modulate.a = 1.0 if not redo_stack.is_empty() else 0.25
+
+
+func _schedule_ai_move() -> void:
+	if not is_ai_mode or game_over or is_animating:
+		return
+	if current_player != ai_player:
+		return
+	is_animating = true
+	await get_tree().create_timer(0.5).timeout
+	if game_over:
+		is_animating = false
+		return
+	_show_ai_thinking()
+	_ai_result = -1
+	_ai_thread  = Thread.new()
+	var board_copy := board.duplicate(true)
+	_ai_thread.start(func(): _ai_result = _ai.best_move(board_copy, ai_player, turn_in_round, ai_difficulty))
+	while _ai_thread.is_alive():
+		await get_tree().process_frame
+	_ai_thread.wait_to_finish()
+	_ai_thread = null
+	_hide_ai_thinking()
+	var col := _ai_result
+	is_animating = false
+	if not game_over and col >= 0:
+		drop_piece(col)
+
+
+func _show_ai_thinking() -> void:
+	var spinner = preload("res://code/spinner.gd").new()
+	spinner.z_index = 10
+	add_child(spinner)
+	var vp     := get_viewport_rect().size
+	var margin := vp.x * 0.015
+	var btn_w  := vp.x * 0.10
+	spinner.position = Vector2(
+		margin + btn_w / 2.0,
+		CENTER_POS.y + (-BOARD_SIZE / 2.0 + 0.5) * GRID_STEP - GRID_STEP * 0.30
+	)
+	spinner.start(GRID_STEP * 0.30, Color.WHITE)
+	_thinking_spinner = spinner
+
+
+func _hide_ai_thinking() -> void:
+	if is_instance_valid(_thinking_spinner):
+		_thinking_spinner.call("stop")
+		_thinking_spinner.queue_free()
+	_thinking_spinner = null
