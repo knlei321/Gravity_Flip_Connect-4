@@ -26,6 +26,21 @@ func play_drop() -> void:
 
 	_spawn_player(buf, dur)
 
+# 滑鼠 hover 選項：輕版落子聲（振幅較小、衰減較快）
+func play_hover() -> void:
+	var dur := 0.20
+	var n   := int(SAMPLE_RATE * dur)
+	var buf := PackedVector2Array()
+	buf.resize(n)
+	for i in range(n):
+		var t     := float(i) / SAMPLE_RATE
+		var noise := randf_range(-1.0, 1.0) * exp(-t * 350.0) * 0.35
+		var click := sin(TAU * 200.0 * t) * exp(-t * 90.0)   * 0.20
+		var thud  := sin(TAU * 140.0 * t) * exp(-t * 35.0)   * 0.45
+		var s     := (noise + click + thud) * 0.40
+		buf[i]     = Vector2(s, s)
+	_spawn_player(buf, dur)
+
 # 落子倒放：棋子上升音效
 func play_drop_reverse() -> void:
 	var dur := 0.40
