@@ -1,12 +1,13 @@
 extends Node2D
 
 signal game_started
+signal ai_game_started(difficulty: int, human_player: int)
 
 const PIECE_SCENE = preload("res://piece.tscn")
 const BOARD_SIZE = 6
 const GRID_STEP = 111
 const MENU_COLS = 5
-const MENU_WORDS = ["START", "RULES", "SETUP"]
+const MENU_WORDS = ["START", "RULES", "SETUP", "VS AI"]
 const MENU_FONT  = preload("res://fonts/PressStart2P-Regular.ttf")
 
 var CENTER_POS: Vector2
@@ -17,8 +18,8 @@ var _audio: Node
 @onready var label_container = $MenuLabelContainer
 
 var pieces_grid = []
-var row_pieces = [[], [], []]
-var row_labels  = [[], [], []]
+var row_pieces = [[], [], [], []]
+var row_labels  = [[], [], [], []]
 var hovered_row := -1
 var pressed_row := -1
 var is_animating := false
@@ -34,6 +35,22 @@ var _note_piece: Node = null
 var _volume_rects: Array = []
 var _note_rect: Rect2 = Rect2()
 var _piece_natural_scale := Vector2.ZERO
+
+var _in_difficulty_select  := false
+var _diff_back_label: Label = null
+var _diff_back_rect: Rect2  = Rect2()
+var _ai_mode_pending      := false
+var _ai_difficulty_pending := 0
+
+var _in_color_select       := false
+var _color_back_label: Label = null
+var _color_back_rect: Rect2  = Rect2()
+var _human_player_pending  := 1
+var _color_hover_side      := -1
+var _color_pressed_side    := -1
+
+const DIFF_WORDS  = ["EASY ", "NORM ", "HARD ", "EVIL "]
+const COLOR_WORDS = ["CHOOS", "YOUR ", "COLOR"]  # rows 0-2，5 chars
 
 func _ready() -> void:
 	pass  # 由 main.gd 在取得 CENTER_POS 後呼叫 initialize()
@@ -68,7 +85,7 @@ func _spawn_all_pieces() -> void:
 			var final_y = (row - BOARD_SIZE / 2.0 + 0.5) * GRID_STEP
 			p.position = Vector2(final_x, -500.0)
 			pieces_grid[col][row] = p
-			if row < 3:
+			if row < 4:
 				row_pieces[row].append(p)
 
 			# 底排（row 5）延遲 0、頂排（row 0）延遲最大，由下往上填滿
@@ -89,7 +106,7 @@ func _spawn_all_pieces() -> void:
 	await get_tree().create_timer(0.22).timeout  # 等頂排彈跳完全穩定
 
 func _add_menu_labels() -> void:
-	for menu_row in range(3):
+	for menu_row in range(4):
 		var word = MENU_WORDS[menu_row]
 		for col in range(MENU_COLS):
 			var label = Label.new()
@@ -110,7 +127,7 @@ func _get_row_at(pos: Vector2) -> int:
 	var local = piece_container.to_local(pos)
 	var col = int(floor((local.x + (BOARD_SIZE * GRID_STEP) / 2.0) / GRID_STEP))
 	var row = int(floor((local.y + (BOARD_SIZE * GRID_STEP) / 2.0) / GRID_STEP))
-	if col >= 0 and col < BOARD_SIZE and row >= 0 and row < 3:
+	if col >= 0 and col < BOARD_SIZE and row >= 0 and row < 4:
 		return row
 	return -1
 
@@ -134,6 +151,109 @@ func _input(event):
 		if is_pressed and _back_btn_rect.has_point(pressed_pos):
 			_go_back_from_rules()
 		return
+
+	if _in_color_select:
+		if event is InputEventKey and event.pressed and not event.echo:
+			if event.physical_keycode == KEY_ESCAPE:
+				_go_back_from_color()
+			return
+		if event is InputEventMouseMotion:
+			if _color_pressed_side < 0:
+				var local: Vector2 = piece_container.to_local(event.global_position)
+				var col := int(floor((local.x + (BOARD_SIZE * GRID_STEP) / 2.0) / GRID_STEP))
+				var row := int(floor((local.y + (BOARD_SIZE * GRID_STEP) / 2.0) / GRID_STEP))
+				var side := -1
+				if row >= 3 and row < BOARD_SIZE and col >= 0 and col < BOARD_SIZE:
+					side = 0 if col < 3 else 1
+				_set_color_hover(side)
+			return
+		var _cpt    := Vector2.ZERO
+		var _cpress := false
+		var _crel   := false
+		if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+			_cpt    = event.global_position
+			_cpress = event.pressed
+			_crel   = not event.pressed
+		elif event is InputEventScreenTouch:
+			_cpt    = event.position
+			_cpress = event.pressed
+			_crel   = not event.pressed
+		if _cpress:
+			if _color_back_rect.has_point(_cpt):
+				_go_back_from_color()
+				return
+			var local: Vector2 = piece_container.to_local(_cpt)
+			var col := int(floor((local.x + (BOARD_SIZE * GRID_STEP) / 2.0) / GRID_STEP))
+			var row := int(floor((local.y + (BOARD_SIZE * GRID_STEP) / 2.0) / GRID_STEP))
+			if row >= 3 and row < BOARD_SIZE and col >= 0 and col < BOARD_SIZE:
+				var ps := 0 if col < 3 else 1
+				_color_pressed_side = ps
+				_color_hover_side   = -1
+				_audio.play_drop()
+				for r in range(3, BOARD_SIZE):
+					for c in range(BOARD_SIZE):
+						if is_instance_valid(pieces_grid[c][r]):
+							pieces_grid[c][r].modulate = Color(1.64, 1.64, 1.64) if (0 if c < 3 else 1) == ps else Color.WHITE
+				var t := create_tween()
+				t.tween_interval(0.07)
+				t.tween_callback(func():
+					if _color_pressed_side == ps:
+						for r2 in range(3, BOARD_SIZE):
+							for c2 in range(BOARD_SIZE):
+								if is_instance_valid(pieces_grid[c2][r2]) and (0 if c2 < 3 else 1) == ps:
+									pieces_grid[c2][r2].modulate = Color(1.32, 1.32, 1.32)
+				)
+		elif _crel and _color_pressed_side >= 0:
+			var local: Vector2 = piece_container.to_local(_cpt)
+			var col := int(floor((local.x + (BOARD_SIZE * GRID_STEP) / 2.0) / GRID_STEP))
+			var row := int(floor((local.y + (BOARD_SIZE * GRID_STEP) / 2.0) / GRID_STEP))
+			var rel_side := -1
+			if row >= 3 and row < BOARD_SIZE and col >= 0 and col < BOARD_SIZE:
+				rel_side = 0 if col < 3 else 1
+			if rel_side == _color_pressed_side:
+				var chosen_side       := _color_pressed_side
+				_in_color_select      = false
+				_color_hover_side     = -1
+				_color_pressed_side   = -1
+				_ai_mode_pending      = true
+				_human_player_pending = 1 if chosen_side == 0 else 2
+				if is_instance_valid(_color_back_label):
+					_color_back_label.queue_free()
+				_color_back_label = null
+				_color_back_rect  = Rect2()
+				is_animating = true
+				await _start_game()
+			else:
+				var prev := _color_pressed_side
+				_color_pressed_side = -1
+				_color_hover_side   = -1
+				for r in range(3, BOARD_SIZE):
+					for c in range(BOARD_SIZE):
+						if is_instance_valid(pieces_grid[c][r]):
+							pieces_grid[c][r].modulate = Color.WHITE
+				var hover_side := -1
+				if row >= 3 and row < BOARD_SIZE and col >= 0 and col < BOARD_SIZE:
+					hover_side = rel_side
+				_set_color_hover(hover_side)
+		return
+
+	if _in_difficulty_select:
+		if event is InputEventKey and event.pressed and not event.echo:
+			if event.physical_keycode == KEY_ESCAPE:
+				_go_back_from_difficulty()
+			return
+		var _pt := Vector2.ZERO
+		var _clicked := false
+		if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
+			_pt = event.global_position
+			_clicked = true
+		elif event is InputEventScreenTouch and event.pressed:
+			_pt = event.position
+			_clicked = true
+		if _clicked and _diff_back_rect.has_point(_pt):
+			_go_back_from_difficulty()
+			return
+		# 其他輸入走一般 row 偵測邏輯（點擊難度排）
 
 	if _setup_container != null:
 		if event is InputEventKey and event.pressed and not event.echo:
@@ -229,14 +349,22 @@ func _on_row_release(row: int) -> void:
 	var pr = pressed_row
 	pressed_row = -1
 	if row == pr:
-		# 放開在同一排才執行
 		is_animating = true
-		match pr:
-			0: await _start_game()
-			1: await _show_rules()
-			2: await _show_setup()
+		if _in_difficulty_select:
+			_in_difficulty_select  = false
+			_ai_difficulty_pending = pr
+			if is_instance_valid(_diff_back_label):
+				_diff_back_label.queue_free()
+			_diff_back_label = null
+			_diff_back_rect  = Rect2()
+			await _show_color_select()
+		else:
+			match pr:
+				0: await _start_game()
+				1: await _show_rules()
+				2: await _show_setup()
+				3: await _show_difficulty()
 	else:
-		# 滑出去放開則還原
 		_restore_row(pr)
 
 func _show_rules() -> void:
@@ -524,8 +652,8 @@ func _go_back_from_setup() -> void:
 
 	# 重新生成 menu 棋子（和初始化一樣從上落下）
 	pieces_grid = []
-	row_pieces  = [[], [], []]
-	row_labels  = [[], [], []]
+	row_pieces  = [[], [], [], []]
+	row_labels  = [[], [], [], []]
 	for _c in range(BOARD_SIZE):
 		var col := []
 		for _r in range(BOARD_SIZE):
@@ -608,7 +736,11 @@ func _start_game() -> void:
 	snap.tween_property(board_container, "rotation", float(n) * TAU, 0.5).set_trans(Tween.TRANS_QUINT).set_ease(Tween.EASE_OUT)
 	await snap.finished
 
-	game_started.emit()
+	if _ai_mode_pending:
+		_ai_mode_pending = false
+		ai_game_started.emit(_ai_difficulty_pending, _human_player_pending)
+	else:
+		game_started.emit()
 
 
 func reinitialize(center: Vector2) -> void:
@@ -618,6 +750,20 @@ func reinitialize(center: Vector2) -> void:
 
 	_destroy_rules_ui()
 	_destroy_setup_ui()
+	_in_difficulty_select = false
+	if is_instance_valid(_diff_back_label):
+		_diff_back_label.queue_free()
+	_diff_back_label = null
+	_diff_back_rect  = Rect2()
+	_in_color_select = false
+	if is_instance_valid(_color_back_label):
+		_color_back_label.queue_free()
+	_color_back_label    = null
+	_color_back_rect     = Rect2()
+	_human_player_pending  = 1
+	_color_hover_side    = -1
+	_color_pressed_side  = -1
+	_ai_mode_pending     = false
 	hovered_row  = -1
 	pressed_row  = -1
 
@@ -627,8 +773,8 @@ func reinitialize(center: Vector2) -> void:
 		child.queue_free()
 
 	pieces_grid = []
-	row_pieces  = [[], [], []]
-	row_labels  = [[], [], []]
+	row_pieces  = [[], [], [], []]
+	row_labels  = [[], [], [], []]
 	for _c in range(BOARD_SIZE):
 		var col := []
 		for _r in range(BOARD_SIZE):
@@ -640,3 +786,298 @@ func reinitialize(center: Vector2) -> void:
 	await _spawn_all_pieces()
 	_add_menu_labels()
 	is_animating = false
+
+
+# ── Difficulty selection ──────────────────────────────────────────────────────
+
+func _show_difficulty() -> void:
+	_restore_row(3)  # 確保 VS AI 排先還原成黑色再開始掃描
+	# 印刷掃描：白＋灰 雙排往上移動
+	for wave_row in range(BOARD_SIZE - 1, -1, -1):
+		# 兩排後（gray_row + 1）→ 黑色，更新標籤
+		var black_row := wave_row + 2
+		if black_row < BOARD_SIZE:
+			for col in range(BOARD_SIZE):
+				if is_instance_valid(pieces_grid[col][black_row]):
+					pieces_grid[col][black_row].set_piece_type(1)
+					pieces_grid[col][black_row].modulate = Color.WHITE
+			if black_row < 4:
+				for col in range(MENU_COLS):
+					row_labels[black_row][col].text = DIFF_WORDS[black_row][col]
+
+		# 一排後（前一個白）→ 灰色
+		var gray_row := wave_row + 1
+		if gray_row < BOARD_SIZE:
+			for col in range(BOARD_SIZE):
+				if is_instance_valid(pieces_grid[col][gray_row]):
+					pieces_grid[col][gray_row].set_piece_type(2)
+					pieces_grid[col][gray_row].modulate = Color(0.68, 0.68, 0.68)
+
+		# 目前這排 → 白色
+		for col in range(BOARD_SIZE):
+			if is_instance_valid(pieces_grid[col][wave_row]):
+				pieces_grid[col][wave_row].set_piece_type(2)
+				pieces_grid[col][wave_row].modulate = Color.WHITE
+		_audio.play_drop()
+		await get_tree().create_timer(0.1).timeout
+
+	# 收尾：row 1 灰→黑（更新標籤），row 0 白→黑（更新標籤）
+	for col in range(BOARD_SIZE):
+		if is_instance_valid(pieces_grid[col][1]):
+			pieces_grid[col][1].set_piece_type(1)
+			pieces_grid[col][1].modulate = Color.WHITE
+	for col in range(MENU_COLS):
+		row_labels[1][col].text = DIFF_WORDS[1][col]
+
+	for col in range(BOARD_SIZE):
+		if is_instance_valid(pieces_grid[col][0]):
+			pieces_grid[col][0].set_piece_type(1)
+			pieces_grid[col][0].modulate = Color.WHITE
+	for col in range(MENU_COLS):
+		row_labels[0][col].text = DIFF_WORDS[0][col]
+
+	# 左下角 < 返回按鈕
+	var vp    := get_viewport_rect().size
+	var bw    := vp.x * 0.08
+	var bh    := vp.y * 0.10
+	var bx    := vp.x * 0.02
+	var by    := vp.y - bh - vp.y * 0.03
+	_diff_back_label = Label.new()
+	_diff_back_label.text = "<"
+	_diff_back_label.add_theme_font_override("font", MENU_FONT)
+	_diff_back_label.add_theme_font_size_override("font_size", int(vp.y * 0.055))
+	_diff_back_label.add_theme_color_override("font_color", Color.WHITE)
+	_diff_back_label.add_theme_constant_override("outline_size", 2)
+	_diff_back_label.add_theme_color_override("font_outline_color", Color.BLACK)
+	_diff_back_label.size                 = Vector2(bw, bh)
+	_diff_back_label.position             = Vector2(bx, by)
+	_diff_back_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_diff_back_label.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
+	_diff_back_label.mouse_filter         = Control.MOUSE_FILTER_IGNORE
+	label_container.add_child(_diff_back_label)
+	_diff_back_rect = Rect2(Vector2(bx, by), Vector2(bw, bh))
+
+	_in_difficulty_select = true
+	is_animating = false
+
+
+func _go_back_from_difficulty() -> void:
+	if is_animating:
+		return
+	is_animating = true
+	_in_difficulty_select = false
+	if is_instance_valid(_diff_back_label):
+		_diff_back_label.queue_free()
+	_diff_back_label = null
+	_diff_back_rect  = Rect2()
+
+	# 反向掃描：白＋灰 雙排往下移動
+	for wave_row in range(BOARD_SIZE):
+		# 兩排前（gray_row - 1）→ 黑色，恢復標籤
+		var black_row := wave_row - 2
+		if black_row >= 0:
+			for col in range(BOARD_SIZE):
+				if is_instance_valid(pieces_grid[col][black_row]):
+					pieces_grid[col][black_row].set_piece_type(1)
+					pieces_grid[col][black_row].modulate = Color.WHITE
+			if black_row < 4:
+				for col in range(MENU_COLS):
+					row_labels[black_row][col].text = MENU_WORDS[black_row][col]
+
+		# 一排前（前一個白）→ 灰色
+		var gray_row := wave_row - 1
+		if gray_row >= 0:
+			for col in range(BOARD_SIZE):
+				if is_instance_valid(pieces_grid[col][gray_row]):
+					pieces_grid[col][gray_row].set_piece_type(2)
+					pieces_grid[col][gray_row].modulate = Color(0.68, 0.68, 0.68)
+
+		# 目前這排 → 白色
+		for col in range(BOARD_SIZE):
+			if is_instance_valid(pieces_grid[col][wave_row]):
+				pieces_grid[col][wave_row].set_piece_type(2)
+				pieces_grid[col][wave_row].modulate = Color.WHITE
+		_audio.play_drop()
+		await get_tree().create_timer(0.1).timeout
+
+	# 收尾：row 4 灰→黑，row 5 白→黑
+	for col in range(BOARD_SIZE):
+		if is_instance_valid(pieces_grid[col][BOARD_SIZE - 2]):
+			pieces_grid[col][BOARD_SIZE - 2].set_piece_type(1)
+			pieces_grid[col][BOARD_SIZE - 2].modulate = Color.WHITE
+	for col in range(BOARD_SIZE):
+		if is_instance_valid(pieces_grid[col][BOARD_SIZE - 1]):
+			pieces_grid[col][BOARD_SIZE - 1].set_piece_type(1)
+			pieces_grid[col][BOARD_SIZE - 1].modulate = Color.WHITE
+
+	# 確保 modulate 與 label 顏色全部還原
+	for row in range(4):
+		_restore_row(row)
+
+	is_animating = false
+
+
+# ── Color selection ───────────────────────────────────────────────────────────
+
+func _show_color_select() -> void:
+	# 掃描波從最底排往上，最終呈現：
+	#   rows 0-2 → 黑色棋子 + COLOR_WORDS 標籤
+	#   row  3   → 黑色棋子 + 空白標籤
+	#   rows 4-5 → 左半(col 0-2)黑色 / 右半(col 3-5)白色
+	for wave_row in range(BOARD_SIZE - 1, -1, -1):
+		var black_row := wave_row + 2
+		if black_row < BOARD_SIZE:
+			for col in range(BOARD_SIZE):
+				if is_instance_valid(pieces_grid[col][black_row]):
+					if black_row >= 3:
+						pieces_grid[col][black_row].set_piece_type(2 if col >= 3 else 1)
+						pieces_grid[col][black_row].modulate = Color.WHITE
+					else:
+						pieces_grid[col][black_row].set_piece_type(1)
+						pieces_grid[col][black_row].modulate = Color(0.45, 0.45, 0.45)
+			if black_row < 3:
+				for col in range(MENU_COLS):
+					row_labels[black_row][col].text = COLOR_WORDS[black_row][col]
+			elif black_row == 3:
+				for col in range(MENU_COLS):
+					row_labels[black_row][col].text = " "
+
+		var gray_row := wave_row + 1
+		if gray_row < BOARD_SIZE:
+			for col in range(BOARD_SIZE):
+				if is_instance_valid(pieces_grid[col][gray_row]):
+					pieces_grid[col][gray_row].set_piece_type(2)
+					pieces_grid[col][gray_row].modulate = Color(0.68, 0.68, 0.68)
+
+		for col in range(BOARD_SIZE):
+			if is_instance_valid(pieces_grid[col][wave_row]):
+				pieces_grid[col][wave_row].set_piece_type(2)
+				pieces_grid[col][wave_row].modulate = Color.WHITE
+		_audio.play_drop()
+		await get_tree().create_timer(0.1).timeout
+
+	# 收尾：row 1 和 row 0
+	for row in [1, 0]:
+		for col in range(BOARD_SIZE):
+			if is_instance_valid(pieces_grid[col][row]):
+				pieces_grid[col][row].set_piece_type(1)
+				pieces_grid[col][row].modulate = Color(0.45, 0.45, 0.45)
+		for col in range(MENU_COLS):
+			row_labels[row][col].text = COLOR_WORDS[row][col]
+
+	# 左下角 < 返回按鈕
+	var vp  := get_viewport_rect().size
+	var bw  := vp.x * 0.08
+	var bh  := vp.y * 0.10
+	var bx  := vp.x * 0.02
+	var by  := vp.y - bh - vp.y * 0.03
+	_color_back_label = Label.new()
+	_color_back_label.text = "<"
+	_color_back_label.add_theme_font_override("font", MENU_FONT)
+	_color_back_label.add_theme_font_size_override("font_size", int(vp.y * 0.055))
+	_color_back_label.add_theme_color_override("font_color", Color.WHITE)
+	_color_back_label.add_theme_constant_override("outline_size", 2)
+	_color_back_label.add_theme_color_override("font_outline_color", Color.BLACK)
+	_color_back_label.size                 = Vector2(bw, bh)
+	_color_back_label.position             = Vector2(bx, by)
+	_color_back_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_color_back_label.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
+	_color_back_label.mouse_filter         = Control.MOUSE_FILTER_IGNORE
+	label_container.add_child(_color_back_label)
+	_color_back_rect = Rect2(Vector2(bx, by), Vector2(bw, bh))
+
+	_in_color_select = true
+	is_animating     = false
+
+
+func _set_color_hover(side: int) -> void:
+	if _color_hover_side == side:
+		return
+	_color_hover_side = side
+	if side >= 0:
+		_audio.play_hover()
+	for row in range(3, BOARD_SIZE):
+		for col in range(BOARD_SIZE):
+			if not is_instance_valid(pieces_grid[col][row]):
+				continue
+			var this_side := 0 if col < 3 else 1
+			if side >= 0 and this_side == side:
+				pieces_grid[col][row].modulate = Color(1.32, 1.32, 1.32)
+			else:
+				pieces_grid[col][row].modulate = Color.WHITE
+
+
+func _go_back_from_color() -> void:
+	if is_animating:
+		return
+	is_animating        = true
+	_in_color_select    = false
+	_color_hover_side   = -1
+	_color_pressed_side = -1
+	if is_instance_valid(_color_back_label):
+		_color_back_label.queue_free()
+	_color_back_label = null
+	_color_back_rect  = Rect2()
+
+	# 反向掃描：白＋灰雙排往下移動，還原回 DIFF_WORDS 狀態
+	for wave_row in range(BOARD_SIZE):
+		var black_row := wave_row - 2
+		if black_row >= 0:
+			for col in range(BOARD_SIZE):
+				if is_instance_valid(pieces_grid[col][black_row]):
+					pieces_grid[col][black_row].set_piece_type(1)
+					pieces_grid[col][black_row].modulate = Color.WHITE
+			if black_row < 4:
+				for col in range(MENU_COLS):
+					row_labels[black_row][col].text = DIFF_WORDS[black_row][col]
+
+		var gray_row := wave_row - 1
+		if gray_row >= 0:
+			for col in range(BOARD_SIZE):
+				if is_instance_valid(pieces_grid[col][gray_row]):
+					pieces_grid[col][gray_row].set_piece_type(2)
+					pieces_grid[col][gray_row].modulate = Color(0.68, 0.68, 0.68)
+
+		for col in range(BOARD_SIZE):
+			if is_instance_valid(pieces_grid[col][wave_row]):
+				pieces_grid[col][wave_row].set_piece_type(2)
+				pieces_grid[col][wave_row].modulate = Color.WHITE
+		_audio.play_drop()
+		await get_tree().create_timer(0.1).timeout
+
+	# 收尾：rows 4, 5 → 全部恢復黑色
+	for row in [BOARD_SIZE - 2, BOARD_SIZE - 1]:
+		for col in range(BOARD_SIZE):
+			if is_instance_valid(pieces_grid[col][row]):
+				pieces_grid[col][row].set_piece_type(1)
+				pieces_grid[col][row].modulate = Color.WHITE
+
+	# 確保 rows 0-3 全部還原 DIFF_WORDS
+	for row in range(4):
+		_restore_row(row)
+		for col in range(MENU_COLS):
+			row_labels[row][col].text = DIFF_WORDS[row][col]
+
+	# 重建 < 返回按鈕，進入難度選擇狀態
+	var vp  := get_viewport_rect().size
+	var bw  := vp.x * 0.08
+	var bh  := vp.y * 0.10
+	var bx  := vp.x * 0.02
+	var by  := vp.y - bh - vp.y * 0.03
+	_diff_back_label = Label.new()
+	_diff_back_label.text = "<"
+	_diff_back_label.add_theme_font_override("font", MENU_FONT)
+	_diff_back_label.add_theme_font_size_override("font_size", int(vp.y * 0.055))
+	_diff_back_label.add_theme_color_override("font_color", Color.WHITE)
+	_diff_back_label.add_theme_constant_override("outline_size", 2)
+	_diff_back_label.add_theme_color_override("font_outline_color", Color.BLACK)
+	_diff_back_label.size                 = Vector2(bw, bh)
+	_diff_back_label.position             = Vector2(bx, by)
+	_diff_back_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_diff_back_label.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
+	_diff_back_label.mouse_filter         = Control.MOUSE_FILTER_IGNORE
+	label_container.add_child(_diff_back_label)
+	_diff_back_rect = Rect2(Vector2(bx, by), Vector2(bw, bh))
+
+	_in_difficulty_select = true
+	is_animating          = false
