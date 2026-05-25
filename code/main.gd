@@ -19,40 +19,32 @@ var piece_counter = 0  # 每次落子遞增，追蹤棋子總數
 var undo_stack = []    # 每個動作前的快照
 var redo_stack = []    # 被 undo 的動作，供 redo 使用
 
-# --- 勝負狀態旗標 ---
-var black_pending_win = false  # 黑方已連四
-
 @onready var background_container = $background # 背景節點
 @onready var board_container = $BoardContainer  # 棋盤節點
 @onready var piece_container = $PieceContainer  # 棋子節點
 @onready var result_label = $ResultLabel/label  # 文字節點
 
-# ── 保留：棋盤震動動畫（原長按空白鍵 Reset 功能）──
-# const _SHAKE_MAX := 8.0
-# func _apply_shake(t: float) -> void:
-# 	var intensity := t * _SHAKE_MAX
-# 	var offset    := Vector2(randf_range(-intensity, intensity), randf_range(-intensity, intensity))
-# 	board_container.position = CENTER_POS + offset
-# 	piece_container.position = CENTER_POS + offset
-# func _restore_shake() -> void:
-# 	board_container.position = CENTER_POS
-# 	piece_container.position = CENTER_POS
-
 var _pause_menu: Node
 var _audio: Node
 var in_menu := true
 
-var _undo_label:      Label = null
-var _redo_label:      Label = null
-var _pause_btn_label: Label = null
+var _undo_label:        Label = null
+var _redo_label:        Label = null
+var _pause_btn_label:   Node  = null
+var _result_subtitle:   Label = null
 var _undo_rect:     Rect2 = Rect2()
 var _redo_rect:     Rect2 = Rect2()
 var _pause_btn_rect: Rect2 = Rect2()
 
-var is_ai_mode    := false
-var ai_difficulty := 0
-var ai_player     := 2   # AI = white, human = black
-var _ai: Node     = null
+var is_ai_mode          := false
+var ai_difficulty       := 0
+var ai_player           := 2
+var _ai: Node           = null
+var time_limit_enabled  := false
+var time_limit_seconds  := 60
+var _turn_timer         := 60.0
+var _prev_timer_player  := -1
+var _timer_label: Label  = null
 
 var _ai_thread:        Thread = null
 var _ai_result:        int    = -1
@@ -60,6 +52,7 @@ var _thinking_spinner: Node   = null
 
 func _ready():
 	DisplayServer.window_set_ime_active(false)
+	DisplayServer.screen_set_orientation(DisplayServer.SCREEN_LANDSCAPE)
 	await get_tree().process_frame
 	CENTER_POS = get_viewport_rect().size / 2
 	board_container.position = CENTER_POS
@@ -78,13 +71,17 @@ func _ready():
 	menu.ai_game_started.connect(_on_ai_game_started)
 	menu.initialize(CENTER_POS)
 
-func _on_game_started() -> void:
+func _on_game_started(time_limit: bool, time_secs: int) -> void:
+	time_limit_enabled = time_limit
+	time_limit_seconds = time_secs
 	_start_game_impl()
 
-func _on_ai_game_started(difficulty: int, human_player: int) -> void:
-	is_ai_mode    = true
-	ai_difficulty = difficulty
-	ai_player     = 3 - human_player  # 人類選黑(1)→AI白(2)，人類選白(2)→AI黑(1)
+func _on_ai_game_started(difficulty: int, human_player: int, time_limit: bool, time_secs: int) -> void:
+	is_ai_mode         = true
+	ai_difficulty      = difficulty
+	ai_player          = 3 - human_player
+	time_limit_enabled = time_limit
+	time_limit_seconds = time_secs
 	_start_game_impl()
 
 func _start_game_impl() -> void:
@@ -116,6 +113,48 @@ func setup_board_data():
 	piece_counter = 0  # 重置棋子計數
 	undo_stack = []    # 清空 undo 歷史
 	redo_stack = []    # 清空 redo 歷史
+
+func _process(delta: float) -> void:
+	if not time_limit_enabled or in_menu or game_over or is_animating: return
+	if _pause_menu != null and _pause_menu.is_paused: return
+	var human_turn := not is_ai_mode or current_player != ai_player
+	if current_player != _prev_timer_player:
+		_prev_timer_player = current_player
+		if human_turn:
+			_turn_timer = float(time_limit_seconds)
+			_update_timer_ui()
+		return
+	if not human_turn: return
+	_turn_timer -= delta
+	_update_timer_ui()
+	if _turn_timer <= 0.0:
+		_turn_timer        = float(time_limit_seconds)
+		_prev_timer_player = -1
+		var valid := []
+		for c in range(BOARD_SIZE):
+			if board[c][0] == 0:
+				valid.append(c)
+		if not valid.is_empty():
+			drop_piece(valid[randi() % valid.size()])
+
+
+func _update_timer_ui() -> void:
+	if not is_instance_valid(_timer_label): return
+	var secs := ceili(_turn_timer)
+	_timer_label.text = str(secs)
+	var limit := float(time_limit_seconds)
+	if _turn_timer <= limit * 0.17:
+		_timer_label.add_theme_color_override("font_color", Color(1.0, 0.3, 0.3))
+	elif _turn_timer <= limit * 0.34:
+		_timer_label.add_theme_color_override("font_color", Color(1.0, 0.75, 0.2))
+	else:
+		_timer_label.add_theme_color_override("font_color", Color.WHITE)
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_GO_BACK_REQUEST:
+		if not in_menu and _pause_menu != null:
+			_pause_menu.toggle()
 
 func _input(event):
 	if in_menu: return
@@ -378,26 +417,6 @@ func check_winner_logic(after_rotation: bool) -> bool:
 			highlight_winning_pieces(2)
 			show_result("WHITE WINS!")
 			return true
-			
-#	else:
-#		# 落子階段（有白方最後一子版本）
-#		if current_player == 1 and b_reached:
-#			# 黑方落子連四 → 設旗標，讓白方還有最後一子
-#			black_pending_win = true
-#			print("Black connected 4! White gets one last move.")
-#			start_warning_flash()
-#			return false  # 遊戲繼續，不結束
-#		if current_player == 2:
-#			if w_reached:
-#				# 白方落子連四（不管 black_pending_win，白方連四就是白方贏）
-#				game_over = true
-#				show_result("WHITE WINS!")
-#				return true
-#			elif black_pending_win:
-#				# 白方用完最後一子但沒連四，黑方獲勝
-#				game_over = true
-#				show_result("BLACK WINS!")
-#				return true
 	else:
 		# 落子階段（無白方最後一子版本）
 		if b_reached:
@@ -436,8 +455,39 @@ func show_result(text: String):
 		_audio.play_win()
 	else:
 		result_label.add_theme_color_override("font_color", Color.GRAY)
+		_audio.play_draw()
 
 	result_label.visible = true
+	_show_result_subtitle()
+
+
+func _show_result_subtitle() -> void:
+	if is_instance_valid(_result_subtitle):
+		_result_subtitle.queue_free()
+	var vp  := get_viewport_rect().size
+	var lbl := Label.new()
+	lbl.text = "TAP TO RESTART"
+	lbl.add_theme_font_override("font", preload("res://fonts/PressStart2P-Regular.ttf"))
+	lbl.add_theme_font_size_override("font_size", int(vp.y * 0.028))
+	lbl.add_theme_color_override("font_color", Color.GRAY)
+	lbl.size                 = Vector2(vp.x, vp.y * 0.06)
+	lbl.position             = Vector2(0.0, vp.y * 0.5 + vp.y * 0.13)
+	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lbl.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
+	lbl.mouse_filter         = Control.MOUSE_FILTER_IGNORE
+	lbl.modulate.a           = 0.0
+	$ResultLabel.add_child(lbl)
+	_result_subtitle = lbl
+
+	var tween := create_tween()
+	tween.tween_interval(1.0)
+	tween.tween_property(lbl, "modulate:a", 1.0, 0.5).set_trans(Tween.TRANS_SINE)
+	tween.tween_callback(func():
+		if not is_instance_valid(lbl): return
+		var loop := lbl.create_tween().set_loops()
+		loop.tween_property(lbl, "modulate:a", 0.0, 0.6).set_trans(Tween.TRANS_SINE)
+		loop.tween_property(lbl, "modulate:a", 1.0, 0.6).set_trans(Tween.TRANS_SINE)
+	)
 	
 func return_to_menu() -> void:
 	if _pause_menu:
@@ -446,50 +496,71 @@ func return_to_menu() -> void:
 		_pause_menu = null
 	_hide_ai_thinking()
 	if _ai_thread != null:
+		if is_instance_valid(_ai):
+			_ai._cancel = true
 		_ai_thread.wait_to_finish()
 		_ai_thread = null
 	_ai_result = -1
 	if is_instance_valid(_ai):
 		_ai.queue_free()
 	_ai           = null
-	is_ai_mode    = false
-	ai_difficulty = 0
-	game_over     = false
-	in_menu       = true
+	is_ai_mode         = false
+	ai_difficulty      = 0
+	time_limit_enabled = false
+	time_limit_seconds = 60
+	game_over          = false
+	in_menu            = true
 	is_animating  = false
 	current_player   = 1
 	turn_in_round    = 0
 	for child in piece_container.get_children():
 		child.queue_free()
-	result_label.visible   = false
+	result_label.visible = false
+	if is_instance_valid(_result_subtitle):
+		_result_subtitle.queue_free()
+	_result_subtitle     = null
 	board_container.rotation = 0.0
 	board_container.hide()
 	piece_container.hide()
 	if is_instance_valid(_undo_label):      _undo_label.queue_free()
 	if is_instance_valid(_redo_label):      _redo_label.queue_free()
 	if is_instance_valid(_pause_btn_label): _pause_btn_label.queue_free()
-	_undo_label      = null
-	_redo_label      = null
-	_pause_btn_label = null
-	_pause_btn_rect  = Rect2()
+	if is_instance_valid(_timer_label):     _timer_label.queue_free()
+	_undo_label        = null
+	_redo_label        = null
+	_pause_btn_label   = null
+	_pause_btn_rect    = Rect2()
+	_timer_label       = null
+	_prev_timer_player = -1
 	$MenuContainer.show()
 	$MenuContainer.reinitialize(CENTER_POS)
 
 func reset_game():
 	print("Resetting game...")
-	game_over = false
-	current_player = 1
-	turn_in_round = 0
-	is_animating = false
-	# black_pending_win = false  # 重置旗標
-	
+	_hide_ai_thinking()
+	if _ai_thread != null:
+		if is_instance_valid(_ai):
+			_ai._cancel = true
+		_ai_thread.wait_to_finish()
+		_ai_thread = null
+	_ai_result = -1
+	game_over          = false
+	current_player     = 1
+	turn_in_round      = 0
+	is_animating       = false
+	_prev_timer_player = -1
+	_turn_timer        = float(time_limit_seconds)
+	_update_timer_ui()
 	setup_board_data()
 	_update_undo_redo_ui()
 	for child in piece_container.get_children():
 		child.queue_free()
 
-	result_label.visible = false  # 隱藏結果文字
-	_schedule_ai_move()  # AI 先手時 reset 後重新觸發
+	result_label.visible = false
+	if is_instance_valid(_result_subtitle):
+		_result_subtitle.queue_free()
+	_result_subtitle = null
+	_schedule_ai_move()
 
 	if absf(board_container.rotation) > 0.01:
 		_audio.play_rotation(0.5)
@@ -561,7 +632,10 @@ func _clear_game_over():  # undo 時如果遊戲已結束，清除勝負狀態
 	if not game_over:
 		return
 	game_over = false
-	result_label.visible = false  # 隱藏勝負文字
+	result_label.visible = false
+	if is_instance_valid(_result_subtitle):
+		_result_subtitle.queue_free()
+	_result_subtitle = null
 	for child in piece_container.get_children():  # 停止所有棋子的勝利閃爍
 		child.stop_glow()
 
@@ -762,20 +836,27 @@ func _create_game_ui() -> void:
 
 	var pause_x := vp.x - btn_w - margin
 	var pause_y := CENTER_POS.y + (-BOARD_SIZE / 2.0 + 0.5) * GRID_STEP - btn_h * 0.5 - GRID_STEP * 0.30
-	_pause_btn_label = Label.new()
-	_pause_btn_label.text = "||"
-	_pause_btn_label.add_theme_font_override("font", font)
-	_pause_btn_label.add_theme_font_size_override("font_size", sz)
-	_pause_btn_label.add_theme_color_override("font_color", Color.WHITE)
-	_pause_btn_label.add_theme_constant_override("outline_size", 2)
-	_pause_btn_label.add_theme_color_override("font_outline_color", Color.BLACK)
-	_pause_btn_label.size                 = Vector2(btn_w, btn_h)
-	_pause_btn_label.position             = Vector2(pause_x, pause_y)
-	_pause_btn_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_pause_btn_label.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
-	_pause_btn_label.mouse_filter         = Control.MOUSE_FILTER_IGNORE
-	add_child(_pause_btn_label)
+	var icon := preload("res://code/pause_icon.gd").new()
+	icon.z_index = 1
+	add_child(icon)
+	icon.position = Vector2(pause_x + btn_w / 2.0, pause_y + btn_h / 2.0)
+	icon.setup(btn_h)
+	_pause_btn_label = icon
 	_pause_btn_rect = Rect2(Vector2(pause_x, pause_y), Vector2(btn_w, btn_h))
+
+	if time_limit_enabled:
+		_timer_label = Label.new()
+		_timer_label.add_theme_font_override("font", font)
+		_timer_label.add_theme_font_size_override("font_size", sz)
+		_timer_label.add_theme_color_override("font_color", Color.WHITE)
+		_timer_label.add_theme_constant_override("outline_size", 2)
+		_timer_label.add_theme_color_override("font_outline_color", Color.BLACK)
+		_timer_label.size                 = Vector2(btn_w, btn_h)
+		_timer_label.position             = Vector2(CENTER_POS.x - btn_w * 0.5, pause_y - btn_h)
+		_timer_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		_timer_label.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
+		add_child(_timer_label)
+		_update_timer_ui()
 
 	_update_undo_redo_ui()
 
@@ -802,13 +883,17 @@ func _schedule_ai_move() -> void:
 	_ai_thread  = Thread.new()
 	var board_copy := board.duplicate(true)
 	_ai_thread.start(func(): _ai_result = _ai.best_move(board_copy, ai_player, turn_in_round, ai_difficulty))
-	while _ai_thread.is_alive():
+	while _ai_thread != null and _ai_thread.is_alive():
 		await get_tree().process_frame
+	if _ai_thread == null:
+		return
 	_ai_thread.wait_to_finish()
 	_ai_thread = null
 	_hide_ai_thinking()
 	var col := _ai_result
 	is_animating = false
+	while _pause_menu != null and _pause_menu.is_paused:
+		await get_tree().process_frame
 	if not game_over and col >= 0:
 		drop_piece(col)
 
