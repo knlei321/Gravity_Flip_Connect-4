@@ -11,9 +11,11 @@ var _menu_rect: Rect2    = Rect2()
 
 func setup(main_node: Node) -> void:
 	_main = main_node
+	process_mode = Node.PROCESS_MODE_ALWAYS
 
 func cleanup() -> void:
 	is_paused = false
+	get_tree().paused = false
 	_destroy_pause_ui()
 
 func toggle() -> void:
@@ -23,13 +25,13 @@ func toggle() -> void:
 		_show_pause()
 
 func _show_pause() -> void:
-	if _main.is_animating or _main.game_over:
-		return
 	is_paused = true
+	get_tree().paused = true
 	_create_pause_ui()
 
 func _resume() -> void:
 	is_paused = false
+	get_tree().paused = false
 	_destroy_pause_ui()
 
 func _input(event: InputEvent) -> void:
@@ -68,24 +70,24 @@ func _create_pause_ui() -> void:
 	overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_pause_layer.add_child(overlay)
 
-	const SZ  := 36
-	const H   := 80.0
-	const W   := 500.0
-	const GAP := 24.0
+	var sz  := int(vp.y * 0.033)
+	var h   := vp.y * 0.073
+	var w   := vp.x * 0.43
+	var gap := vp.y * 0.022
 	var items := ["RESUME", "RESTART", "MAIN MENU"]
-	var total_h: float = items.size() * H + (items.size() - 1) * GAP
+	var total_h: float = items.size() * h + (items.size() - 1) * gap
 	var start_y: float = (vp.y - total_h) / 2.0
 
 	for i in range(items.size()):
 		var lbl := Label.new()
 		lbl.text = items[i]
 		lbl.add_theme_font_override("font", MENU_FONT)
-		lbl.add_theme_font_size_override("font_size", SZ)
+		lbl.add_theme_font_size_override("font_size", sz)
 		lbl.add_theme_color_override("font_color", Color.WHITE)
 		lbl.add_theme_constant_override("outline_size", 2)
 		lbl.add_theme_color_override("font_outline_color", Color.BLACK)
-		lbl.size                 = Vector2(W, H)
-		lbl.position             = Vector2((vp.x - W) / 2.0, start_y + float(i) * (H + GAP))
+		lbl.size                 = Vector2(w, h)
+		lbl.position             = Vector2((vp.x - w) / 2.0, start_y + float(i) * (h + gap))
 		lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		lbl.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
 		lbl.mouse_filter         = Control.MOUSE_FILTER_IGNORE
@@ -107,10 +109,12 @@ func _destroy_pause_ui() -> void:
 
 func _on_restart() -> void:
 	is_paused = false
+	get_tree().paused = false
 	_destroy_pause_ui()
 	_main.reset_game()
 
 func _on_menu() -> void:
 	is_paused = false
+	get_tree().paused = false
 	_destroy_pause_ui()
 	_main.return_to_menu()
