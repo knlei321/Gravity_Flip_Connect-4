@@ -2,13 +2,14 @@ extends Node
 
 const BOARD_SIZE  = 6
 const INF_VAL     = 100000
-const DIFF_DEPTH  = [3, 5, 7, 16]          # 16 = 實用上限，對人類等同完美但計算可控
-const DIFF_RANDOM = [0.60, 0.20, 0.00, 0.00]
+const DIFF_DEPTH  = [2, 4, 7, 16]
+const DIFF_RANDOM = [0.70, 0.40, 0.10, 0.00]
 const COL_ORDER   = [2, 3, 1, 4, 0, 5]     # 中間欄優先，同 HTML 版
 
 var _zobrist: Array = []   # _zobrist[piece][col][row]
 var _zt:      Array = []   # _zt[turn_in_round]
 var _tt:      Dictionary = {}  # 永久保留，不在每次 best_move 清除
+var _cancel  := false
 
 func _ready() -> void:
 	_init_zobrist()
@@ -37,9 +38,34 @@ func _board_hash(board: Array, turn: int) -> int:
 # Returns best column for ai_player to play.
 # board[col][row], row 0 = top, row BOARD_SIZE-1 = bottom
 func best_move(board: Array, ai_player: int, turn_in_round: int, difficulty: int) -> int:
+	_cancel = false
 	var human:     int   = 3 - ai_player
 	var max_depth: int   = DIFF_DEPTH[difficulty]
 	var rand_ch:   float = DIFF_RANDOM[difficulty]
+
+	if difficulty == 2:
+		var pieces := 0
+		for c in range(BOARD_SIZE):
+			for r in range(BOARD_SIZE):
+				if board[c][r] != 0:
+					pieces += 1
+		max_depth = 6 if pieces < 6 else 4
+
+	# 強制判斷：在隨機和 minimax 之前執行
+	# 1. AI 立即可勝 → 直接落子（所有難度）
+	for c in COL_ORDER:
+		if board[c][0] != 0: continue
+		var dr := _find_drop_row(board, c)
+		if _check_win(_drop(board, c, ai_player, dr), ai_player):
+			return c
+
+	# 2. 對方立即可勝 → 強制擋（Normal 以上）
+	if difficulty >= 1:
+		for c in COL_ORDER:
+			if board[c][0] != 0: continue
+			var dr := _find_drop_row(board, c)
+			if _check_win(_drop(board, c, human, dr), human):
+				return c
 
 	if randf() < rand_ch:
 		var valid: Array = []
@@ -68,9 +94,9 @@ func best_move(board: Array, ai_player: int, turn_in_round: int, difficulty: int
 	var beta      :=  INF_VAL + 1
 
 	for move in move_list:
-		var c:        int   = move[0]
-		var drop_row: int   = move[1]
-		var nb:       Array = move[2]
+		var c:         int   = move[0]
+		var _drop_row: int   = move[1]
+		var nb:        Array = move[2]
 
 		# 落子即勝（旋轉前）→ 直接回傳
 		if _check_win(nb, ai_player):
@@ -96,7 +122,9 @@ func best_move(board: Array, ai_player: int, turn_in_round: int, difficulty: int
 
 func _minimax(board: Array, depth: int, alpha: int, beta: int,
 			  is_ai_turn: bool, ai_player: int, human: int,
-			  turn: int, hash: int) -> int:
+			  turn: int, board_hash: int) -> int:
+
+	if _cancel: return 0
 
 	# 雙方同時連四（旋轉後）→ 平局，必須在單方勝利之前檢查
 	if _check_win(board, ai_player) and _check_win(board, human): return 0
@@ -105,8 +133,8 @@ func _minimax(board: Array, depth: int, alpha: int, beta: int,
 	if _is_full(board):                return 0
 	if depth == 0:                     return _evaluate(board, ai_player, human)
 
-	if hash in _tt:
-		var e = _tt[hash]
+	if board_hash in _tt:
+		var e = _tt[board_hash]
 		if e["d"] >= depth:
 			if   e["f"] == 0: return e["v"]
 			elif e["f"] == 1: alpha = maxi(alpha, e["v"])
@@ -150,7 +178,7 @@ func _minimax(board: Array, depth: int, alpha: int, beta: int,
 				continue
 			nb_eval = _rotate_and_gravity(nb)
 
-		var nh: int = hash ^ (_zt[turn] as int) ^ (_zt[next_turn] as int) ^ (_zobrist[mover][c][drop_row] as int)
+		var nh: int = board_hash ^ (_zt[turn] as int) ^ (_zt[next_turn] as int) ^ (_zobrist[mover][c][drop_row] as int)
 		if turn == 1:
 			nh = _board_hash(nb_eval, next_turn)
 
@@ -168,7 +196,7 @@ func _minimax(board: Array, depth: int, alpha: int, beta: int,
 	var flag := 0
 	if   best <= orig_alpha: flag = 2
 	elif best >= beta:       flag = 1
-	_tt[hash] = {"d": depth, "f": flag, "v": best}
+	_tt[board_hash] = {"d": depth, "f": flag, "v": best}
 
 	return best
 
