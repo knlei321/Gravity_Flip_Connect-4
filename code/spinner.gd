@@ -33,7 +33,7 @@ func _animate() -> void:
 				_: _alphas[i] = 0.12
 		_head = (_head + 1) % N
 		queue_redraw()
-		await get_tree().create_timer(STEP_SEC).timeout
+		await get_tree().create_timer(STEP_SEC, false).timeout
 
 func stop() -> void:
 	_running = false
