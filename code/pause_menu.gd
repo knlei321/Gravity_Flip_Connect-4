@@ -27,11 +27,13 @@ func toggle() -> void:
 func _show_pause() -> void:
 	is_paused = true
 	get_tree().paused = true
+	_main.duck_bgm()
 	_create_pause_ui()
 
 func _resume() -> void:
 	is_paused = false
 	get_tree().paused = false
+	_main.unduck_bgm()
 	_destroy_pause_ui()
 
 func _input(event: InputEvent) -> void:
