@@ -1,7 +1,7 @@
 extends Node2D
 
-signal game_started(time_limit: bool, time_seconds: int)
-signal ai_game_started(difficulty: int, human_player: int, time_limit: bool, time_seconds: int)
+signal game_started(time_limit: bool, time_seconds: int, new_rule: bool)
+signal ai_game_started(difficulty: int, human_player: int, time_limit: bool, time_seconds: int, new_rule: bool)
 
 const PIECE_SCENE = preload("res://piece.tscn")
 const BOARD_SIZE = 6
@@ -25,6 +25,9 @@ var pressed_row := -1
 var is_animating := false
 var _rules_container: Node2D = null
 var _back_btn_rect: Rect2 = Rect2()
+var _rules_nav_right_rect: Rect2 = Rect2()
+var _rules2_nav_left_rect: Rect2 = Rect2()
+var _rules_came_from_setup: bool = false
 
 var _setup_container: Node2D = null
 var _setup_back_btn_rect: Rect2 = Rect2()
@@ -47,20 +50,27 @@ var _time_limit_seconds:  int        = 60
 var _time_toggle_piece:   Node       = null
 var _time_toggle_rect:    Rect2      = Rect2()
 var _timer_toggle_label:  Label      = null
-var _time_minus_rect:     Rect2      = Rect2()
-var _time_plus_rect:      Rect2      = Rect2()
 var _time_value_rect:     Rect2      = Rect2()
 var _digit_labels:        Array       = []
-var _time_minus_symbol:   Node       = null
-var _time_plus_symbol:    Node       = null
 var _time_minus1_symbol:  Node       = null
 var _time_plus1_symbol:   Node       = null
 var _time_minus1_rect:    Rect2      = Rect2()
 var _time_plus1_rect:     Rect2      = Rect2()
+var _time_row1_backing:   Array       = []
 var _time_input_layer:    CanvasLayer = null
 var _time_input_edit:     LineEdit    = null
 var _filler_pieces:       Array       = []
 var _piece_natural_scale := Vector2.ZERO
+var _question_piece:      Node       = null
+var _question_rect:       Rect2      = Rect2()
+var _in_rules2:           bool       = false
+var _rules2_container:    Node2D     = null
+var _rules2_back_rect:    Rect2      = Rect2()
+
+var _new_rule_enabled:     bool  = false
+var _new_rule_piece:       Node  = null
+var _new_rule_toggle_rect: Rect2 = Rect2()
+var _new_rule_label:       Label = null
 
 var _in_difficulty_select  := false
 var _diff_back_label: Label = null
@@ -91,7 +101,9 @@ func _load_settings() -> void:
 		_bgm_is_muted       = cfg.get_value("audio", "bgm_muted",        false)
 		_time_limit_enabled = cfg.get_value("game",  "time_limit",      true)
 		_time_limit_seconds = cfg.get_value("game",  "time_limit_secs", 60)
+		_new_rule_enabled   = cfg.get_value("game",  "new_rule",        false)
 	_apply_volume()
+	_apply_bgm_volume()
 
 func _save_settings() -> void:
 	var cfg := ConfigFile.new()
@@ -101,6 +113,7 @@ func _save_settings() -> void:
 	cfg.set_value("audio", "bgm_muted",        _bgm_is_muted)
 	cfg.set_value("game",  "time_limit",      _time_limit_enabled)
 	cfg.set_value("game",  "time_limit_secs", _time_limit_seconds)
+	cfg.set_value("game",  "new_rule",        _new_rule_enabled)
 	cfg.save(SAVE_PATH)
 
 func initialize(center: Vector2) -> void:
@@ -197,8 +210,11 @@ func _input(event):
 		elif event is InputEventScreenTouch and event.pressed:
 			pressed_pos = event.position
 			is_pressed  = true
-		if is_pressed and _back_btn_rect.has_point(pressed_pos):
-			_go_back_from_rules()
+		if is_pressed:
+			if _back_btn_rect.has_point(pressed_pos):
+				_go_back_from_rules()
+			elif _rules_nav_right_rect.has_point(pressed_pos):
+				_go_to_rules2_from_rules1()
 		return
 
 	if _in_color_select:
@@ -304,6 +320,26 @@ func _input(event):
 			return
 		# 其他輸入走一般 row 偵測邏輯（點擊難度排）
 
+	if _in_rules2:
+		if event is InputEventKey and event.pressed and not event.echo:
+			if event.physical_keycode == KEY_ESCAPE:
+				_go_back_from_rules2()
+			return
+		var _r2pt    := Vector2.ZERO
+		var _r2press := false
+		if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
+			_r2pt    = event.global_position
+			_r2press = true
+		elif event is InputEventScreenTouch and event.pressed:
+			_r2pt    = event.position
+			_r2press = true
+		if _r2press:
+			if _rules2_back_rect.has_point(_r2pt):
+				_go_back_from_rules2()
+			elif _rules2_nav_left_rect.has_point(_r2pt):
+				_go_to_rules1_from_rules2()
+		return
+
 	if _setup_container != null:
 		if _time_input_layer != null:
 			if event is InputEventKey and event.pressed and not event.echo:
@@ -326,7 +362,7 @@ func _input(event):
 		if clicked:
 			for i in range(_volume_rects.size()):
 				if _volume_rects[i].has_point(pt):
-					_volume_level = 5 - i
+					_volume_level = i + 1
 					_is_muted = false
 					_update_volume_display()
 					_apply_volume()
@@ -343,7 +379,7 @@ func _input(event):
 				return
 			for i in range(_bgm_volume_rects.size()):
 				if _bgm_volume_rects[i].has_point(pt):
-					_bgm_volume_level = 5 - i
+					_bgm_volume_level = i + 1
 					_bgm_is_muted = false
 					_update_bgm_volume_display()
 					_apply_bgm_volume()
@@ -378,22 +414,23 @@ func _input(event):
 				_audio.play_drop()
 				_pulse_symbol(_time_plus1_symbol)
 				return
-			if _time_minus_rect.has_point(pt):
-				_time_limit_seconds = maxi(1, _time_limit_seconds - 5)
-				_update_time_value_display()
-				_save_settings()
-				_audio.play_drop()
-				_pulse_symbol(_time_minus_symbol)
-				return
-			if _time_plus_rect.has_point(pt):
-				_time_limit_seconds = mini(999, _time_limit_seconds + 5)
-				_update_time_value_display()
-				_save_settings()
-				_audio.play_drop()
-				_pulse_symbol(_time_plus_symbol)
-				return
 			if _time_value_rect.has_point(pt):
 				_show_time_input()
+				return
+			if _new_rule_toggle_rect.has_point(pt):
+				_new_rule_enabled = not _new_rule_enabled
+				_update_new_rule_display()
+				_save_settings()
+				_audio.play_drop()
+				return
+			if _question_rect.has_point(pt):
+				_audio.play_drop()
+				if is_instance_valid(_question_piece):
+					var qt := create_tween()
+					qt.tween_property(_question_piece, "scale", _piece_natural_scale * 1.35, 0.07).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+					qt.tween_property(_question_piece, "scale", _piece_natural_scale,        0.10).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+				await get_tree().create_timer(0.18).timeout
+				_show_rules2()
 				return
 			if _setup_back_btn_rect.has_point(pt):
 				_go_back_from_setup()
@@ -479,6 +516,7 @@ func _on_row_release(row: int) -> void:
 		_restore_row(pr)
 
 func _show_rules() -> void:
+	_rules_came_from_setup = false
 	label_container.hide()
 
 	var dur    := 0.75
@@ -553,20 +591,56 @@ func _create_rules_ui() -> void:
 			_rules_container.add_child(lbl)
 		cur_y += h
 
-	var back := Label.new()
-	back.text = "< BACK"
-	back.add_theme_font_override("font", MENU_FONT)
-	back.add_theme_font_size_override("font_size", 28)
-	back.add_theme_color_override("font_color", Color.WHITE)
-	back.add_theme_constant_override("outline_size", 2)
-	back.add_theme_color_override("font_outline_color", Color.BLACK)
-	back.size                 = Vector2(320.0, 64.0)
-	back.position             = Vector2(60.0, vp.y - 110.0)
-	back.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
-	back.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
-	back.mouse_filter         = Control.MOUSE_FILTER_IGNORE
-	_rules_container.add_child(back)
-	_back_btn_rect = Rect2(Vector2(60.0, vp.y - 110.0), Vector2(320.0, 64.0))
+	var nav_sz     := int(vp.y * 0.033)
+	var nav_btn_w  := vp.x * 0.10
+	var nav_btn_h  := vp.y * 0.10
+	var nav_margin := vp.x * 0.015
+	var nav_btn_y  := CENTER_POS.y + (BOARD_SIZE / 2.0 - 0.5) * GRID_STEP - nav_btn_h * 0.5 + GRID_STEP * 0.30
+
+	var back_x   := vp.x * 0.04
+	var back_y   := vp.y - nav_btn_h - vp.y * 0.04
+	var back_gap := nav_sz * 0.4
+	var back_arrow := Label.new()
+	back_arrow.text = "<"
+	back_arrow.add_theme_font_override("font", MENU_FONT)
+	back_arrow.add_theme_font_size_override("font_size", nav_sz)
+	back_arrow.add_theme_color_override("font_color", Color.WHITE)
+	back_arrow.add_theme_constant_override("outline_size", 2)
+	back_arrow.add_theme_color_override("font_outline_color", Color.BLACK)
+	back_arrow.size                 = Vector2(nav_sz + back_gap, nav_btn_h)
+	back_arrow.position             = Vector2(back_x, back_y)
+	back_arrow.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	back_arrow.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
+	back_arrow.mouse_filter         = Control.MOUSE_FILTER_IGNORE
+	_rules_container.add_child(back_arrow)
+	var back_text := Label.new()
+	back_text.text = "BACK"
+	back_text.add_theme_font_override("font", MENU_FONT)
+	back_text.add_theme_font_size_override("font_size", nav_sz)
+	back_text.add_theme_color_override("font_color", Color.WHITE)
+	back_text.add_theme_constant_override("outline_size", 2)
+	back_text.add_theme_color_override("font_outline_color", Color.BLACK)
+	back_text.size                 = Vector2(vp.x * 0.20, nav_btn_h)
+	back_text.position             = Vector2(back_x + nav_sz + back_gap, back_y)
+	back_text.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	back_text.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
+	back_text.mouse_filter         = Control.MOUSE_FILTER_IGNORE
+	_rules_container.add_child(back_text)
+	_back_btn_rect = Rect2(Vector2(back_x, back_y), Vector2(vp.x * 0.25, nav_btn_h))
+	var nav_right  := Label.new()
+	nav_right.text = ">>"
+	nav_right.add_theme_font_override("font", MENU_FONT)
+	nav_right.add_theme_font_size_override("font_size", nav_sz)
+	nav_right.add_theme_color_override("font_color", Color.WHITE)
+	nav_right.add_theme_constant_override("outline_size", 2)
+	nav_right.add_theme_color_override("font_outline_color", Color.BLACK)
+	nav_right.size                 = Vector2(nav_btn_w, nav_btn_h)
+	nav_right.position             = Vector2(vp.x - nav_btn_w - nav_margin, nav_btn_y)
+	nav_right.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	nav_right.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
+	nav_right.mouse_filter         = Control.MOUSE_FILTER_IGNORE
+	_rules_container.add_child(nav_right)
+	_rules_nav_right_rect = Rect2(Vector2(vp.x - nav_btn_w - nav_margin, nav_btn_y), Vector2(nav_btn_w, nav_btn_h))
 
 
 func _go_back_from_rules() -> void:
@@ -586,8 +660,12 @@ func _go_back_from_rules() -> void:
 	slide.tween_property(board_container, "rotation", 0.0, dur).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 	await slide.finished
 
-	_restore_row(1)
-	label_container.show()
+	if _rules_came_from_setup:
+		_rules_came_from_setup = false
+		_setup_container.show()
+	else:
+		_restore_row(1)
+		label_container.show()
 	is_animating = false
 
 
@@ -615,43 +693,58 @@ func _show_setup() -> void:
 
 	# ── 彈出動畫：對角波從左下往右上 wave = col + (BOARD_SIZE-1-row) ──
 	var wave_map: Dictionary = {}
-	# col 0 SFX (rows 0-4)
-	for r in range(5):
-		var w: int = BOARD_SIZE - 1 - r
-		if not wave_map.has(w): wave_map[w] = []
-		wave_map[w].append(_volume_pieces[r])
-	# col 1 BGM (rows 0-4)
-	for r in range(5):
-		var w: int = 1 + BOARD_SIZE - 1 - r
-		if not wave_map.has(w): wave_map[w] = []
-		wave_map[w].append(_bgm_volume_pieces[r])
-	# col 2 TIMER (rows 0-4)
-	for r in range(5):
-		var w: int = 2 + BOARD_SIZE - 1 - r
-		if not wave_map.has(w): wave_map[w] = []
-		wave_map[w].append(_volume_pieces[5 + r])
-	# col 0 row 5 (speaker)
+	# Row 5: col0=w0 (speaker), cols1-5=w1-5 (SFX)
 	if not wave_map.has(0): wave_map[0] = []
 	wave_map[0].append(_note_piece)
 	if is_instance_valid(_note_icon): wave_map[0].append(_note_icon)
-	# col 1 row 5 (note)
+	for i in range(5):
+		var w: int = i + 1
+		if not wave_map.has(w): wave_map[w] = []
+		wave_map[w].append(_volume_pieces[i])
+	# Row 4: col0=w1 (note), cols1-5=w2-6 (BGM)
 	if not wave_map.has(1): wave_map[1] = []
 	wave_map[1].append(_bgm_note_piece)
 	if is_instance_valid(_bgm_note_icon): wave_map[1].append(_bgm_note_icon)
-	# col 2 row 5 (toggle)
+	for i in range(5):
+		var w: int = i + 2
+		if not wave_map.has(w): wave_map[w] = []
+		wave_map[w].append(_bgm_volume_pieces[i])
+	# Row 3: cols0-4=w2-6 (filler[11-15]), col5=w7 (?)
 	if not wave_map.has(2): wave_map[2] = []
-	wave_map[2].append(_time_toggle_piece)
-	# cols 3-5 filler (rows 0-5)
-	for fc in range(3, BOARD_SIZE):
-		for fr in range(BOARD_SIZE):
-			var w: int = fc + BOARD_SIZE - 1 - fr
-			if not wave_map.has(w): wave_map[w] = []
-			wave_map[w].append(_filler_pieces[(fc - 3) * BOARD_SIZE + fr])
-	# +/- symbols same wave as their underlying filler piece
-	if is_instance_valid(_time_minus_symbol):  wave_map[3].append(_time_minus_symbol)  # col 3 row 5
-	if is_instance_valid(_time_plus_symbol):   wave_map[5].append(_time_plus_symbol)   # col 5 row 5
-	if is_instance_valid(_time_minus1_symbol): wave_map[4].append(_time_minus1_symbol) # col 3 row 4
-	if is_instance_valid(_time_plus1_symbol):  wave_map[6].append(_time_plus1_symbol)  # col 5 row 4
+	wave_map[2].append(_filler_pieces[11])
+	for i in range(4):
+		var w: int = i + 3
+		if not wave_map.has(w): wave_map[w] = []
+		wave_map[w].append(_filler_pieces[12 + i])
+	if not wave_map.has(7): wave_map[7] = []
+	wave_map[7].append(_question_piece)
+	# Row 2: cols0-4=w3-7 (filler[6-10]), col5=w8 (extra toggle)
+	for i in range(5):
+		var w: int = i + 3
+		if not wave_map.has(w): wave_map[w] = []
+		wave_map[w].append(_filler_pieces[6 + i])
+	if not wave_map.has(8): wave_map[8] = []
+	wave_map[8].append(_new_rule_piece)
+	# Row 1: col0=w4 (-1), cols1-3=w5-7 (digits), col4=w8 (+1), col5=w9 (filler[5])
+	if not wave_map.has(4): wave_map[4] = []
+	wave_map[4].append(_time_row1_backing[0])
+	if is_instance_valid(_time_minus1_symbol): wave_map[4].append(_time_minus1_symbol)
+	for i in range(3):
+		var w: int = i + 5
+		if not wave_map.has(w): wave_map[w] = []
+		wave_map[w].append(_time_row1_backing[1 + i])
+	if not wave_map.has(8): wave_map[8] = []
+	wave_map[8].append(_time_row1_backing[4])
+	if is_instance_valid(_time_plus1_symbol): wave_map[8].append(_time_plus1_symbol)
+	if not wave_map.has(9): wave_map[9] = []
+	wave_map[9].append(_filler_pieces[5])
+	# Row 0: cols0-4=w5-9 (filler[0-4]), col5=w10 (timer toggle)
+	for i in range(5):
+		var w: int = i + 5
+		if not wave_map.has(w): wave_map[w] = []
+		wave_map[w].append(_filler_pieces[i])
+	if not wave_map.has(10): wave_map[10] = []
+	wave_map[10].append(_time_toggle_piece)
 	var max_pop := 0.0
 	var sorted_waves: Array = wave_map.keys()
 	sorted_waves.sort()
@@ -660,7 +753,7 @@ func _show_setup() -> void:
 		var wpieces: Array = wave_map[wv]
 		for pi in range(wpieces.size()):
 			var p = wpieces[pi]
-			var is_sym: bool = (p == _time_minus_symbol or p == _time_plus_symbol or p == _time_minus1_symbol or p == _time_plus1_symbol)
+			var is_sym: bool = (p == _time_minus1_symbol or p == _time_plus1_symbol)
 			var tgt: Vector2 = Vector2.ONE if is_sym else _piece_natural_scale
 			var st = create_tween()
 			st.tween_interval(delay)
@@ -685,230 +778,304 @@ func _create_setup_ui() -> void:
 	add_child(_setup_container)
 	_volume_pieces.clear()
 	_volume_rects.clear()
-
-	var local_x: float  = (0 - BOARD_SIZE / 2.0 + 0.5) * GRID_STEP
-	var screen_x: float = CENTER_POS.x + local_x
-
-	for r in range(5):
-		var local_y: float  = (r - BOARD_SIZE / 2.0 + 0.5) * GRID_STEP
-		var screen_y: float = CENTER_POS.y + local_y
-		var p               := PIECE_SCENE.instantiate()
-		piece_container.add_child(p)
-		if _piece_natural_scale == Vector2.ZERO:
-			_piece_natural_scale = p.scale
-		p.position = Vector2(local_x, local_y)
-		p.scale    = Vector2.ZERO
-		_volume_pieces.append(p)
-		_volume_rects.append(Rect2(
-			Vector2(screen_x - GRID_STEP / 2.0, screen_y - GRID_STEP / 2.0),
-			Vector2(GRID_STEP, GRID_STEP)
-		))
-
-	var note_local_y: float  = (5 - BOARD_SIZE / 2.0 + 0.5) * GRID_STEP
-	var note_screen_y: float = CENTER_POS.y + note_local_y
-	_note_piece = PIECE_SCENE.instantiate()
-	piece_container.add_child(_note_piece)
-	_note_piece.position = Vector2(local_x, note_local_y)
-	_note_piece.scale    = Vector2.ZERO
-	_note_piece.set_piece_type(1)
-	_note_rect = Rect2(
-		Vector2(screen_x - GRID_STEP / 2.0, note_screen_y - GRID_STEP / 2.0),
-		Vector2(GRID_STEP, GRID_STEP)
-	)
-	_note_icon = preload("res://code/speaker_icon.gd").new()
-	piece_container.add_child(_note_icon)
-	(_note_icon as Node2D).position = Vector2(local_x, note_local_y)
-	(_note_icon as Node2D).scale    = Vector2.ZERO
-	_note_icon.call("setup", GRID_STEP)
-
-	# BGM 音量欄（col 1，rows 0-4）+ 音符圖示（row 5）
-	var bgm_local_x: float  = (1 - BOARD_SIZE / 2.0 + 0.5) * GRID_STEP
-	var bgm_screen_x: float = CENTER_POS.x + bgm_local_x
 	_bgm_volume_pieces.clear()
 	_bgm_volume_rects.clear()
-	for r in range(5):
-		var bly: float  = (r - BOARD_SIZE / 2.0 + 0.5) * GRID_STEP
-		var bsy: float  = CENTER_POS.y + bly
-		var bp          := PIECE_SCENE.instantiate()
-		piece_container.add_child(bp)
-		bp.position = Vector2(bgm_local_x, bly)
-		bp.scale    = Vector2.ZERO
-		_bgm_volume_pieces.append(bp)
-		_bgm_volume_rects.append(Rect2(
-			Vector2(bgm_screen_x - GRID_STEP / 2.0, bsy - GRID_STEP / 2.0),
-			Vector2(GRID_STEP, GRID_STEP)
-		))
-	var bgm_note_ly: float  = (5 - BOARD_SIZE / 2.0 + 0.5) * GRID_STEP
-	var bgm_note_sy: float  = CENTER_POS.y + bgm_note_ly
+	_filler_pieces.clear()
+	_time_row1_backing.clear()
+	_digit_labels.clear()
+
+	var vp := get_viewport_rect().size
+
+	# ── Row 5: SFX 音量（水平） ──────────────────────────────────────────
+	var r5_ly: float  = (5 - BOARD_SIZE / 2.0 + 0.5) * GRID_STEP
+	var r5c0_lx: float = (0 - BOARD_SIZE / 2.0 + 0.5) * GRID_STEP
+	var r5c0_sx: float = CENTER_POS.x + r5c0_lx
+	var r5c0_sy: float = CENTER_POS.y + r5_ly
+	_note_piece = PIECE_SCENE.instantiate()
+	piece_container.add_child(_note_piece)
+	if _piece_natural_scale == Vector2.ZERO:
+		_piece_natural_scale = _note_piece.scale
+	_note_piece.position = Vector2(r5c0_lx, r5_ly)
+	_note_piece.scale    = Vector2.ZERO
+	_note_piece.set_piece_type(1)
+	_note_rect = Rect2(Vector2(r5c0_sx - GRID_STEP / 2.0, r5c0_sy - GRID_STEP / 2.0), Vector2(GRID_STEP, GRID_STEP))
+	_note_icon = preload("res://code/speaker_icon.gd").new()
+	piece_container.add_child(_note_icon)
+	(_note_icon as Node2D).position = Vector2(r5c0_lx, r5_ly)
+	(_note_icon as Node2D).scale    = Vector2.ZERO
+	_note_icon.call("setup", GRID_STEP)
+	for c in range(1, BOARD_SIZE):
+		var lx: float = (c - BOARD_SIZE / 2.0 + 0.5) * GRID_STEP
+		var sx: float = CENTER_POS.x + lx
+		var p         := PIECE_SCENE.instantiate()
+		piece_container.add_child(p)
+		p.position = Vector2(lx, r5_ly)
+		p.scale    = Vector2.ZERO
+		_volume_pieces.append(p)
+		_volume_rects.append(Rect2(Vector2(sx - GRID_STEP / 2.0, r5c0_sy - GRID_STEP / 2.0), Vector2(GRID_STEP, GRID_STEP)))
+
+	# ── Row 4: BGM 音量（水平） ──────────────────────────────────────────
+	var r4_ly: float  = (4 - BOARD_SIZE / 2.0 + 0.5) * GRID_STEP
+	var r4c0_lx: float = (0 - BOARD_SIZE / 2.0 + 0.5) * GRID_STEP
+	var r4c0_sx: float = CENTER_POS.x + r4c0_lx
+	var r4c0_sy: float = CENTER_POS.y + r4_ly
 	_bgm_note_piece = PIECE_SCENE.instantiate()
 	piece_container.add_child(_bgm_note_piece)
-	_bgm_note_piece.position = Vector2(bgm_local_x, bgm_note_ly)
+	_bgm_note_piece.position = Vector2(r4c0_lx, r4_ly)
 	_bgm_note_piece.scale    = Vector2.ZERO
 	_bgm_note_piece.set_piece_type(1)
-	_bgm_note_rect = Rect2(
-		Vector2(bgm_screen_x - GRID_STEP / 2.0, bgm_note_sy - GRID_STEP / 2.0),
-		Vector2(GRID_STEP, GRID_STEP)
-	)
+	_bgm_note_rect = Rect2(Vector2(r4c0_sx - GRID_STEP / 2.0, r4c0_sy - GRID_STEP / 2.0), Vector2(GRID_STEP, GRID_STEP))
 	_bgm_note_icon = preload("res://code/note_icon.gd").new()
 	piece_container.add_child(_bgm_note_icon)
-	(_bgm_note_icon as Node2D).position = Vector2(bgm_local_x, bgm_note_ly)
+	(_bgm_note_icon as Node2D).position = Vector2(r4c0_lx, r4_ly)
 	(_bgm_note_icon as Node2D).scale    = Vector2.ZERO
 	_bgm_note_icon.call("setup", GRID_STEP)
+	for c in range(1, BOARD_SIZE):
+		var lx: float = (c - BOARD_SIZE / 2.0 + 0.5) * GRID_STEP
+		var sx: float = CENTER_POS.x + lx
+		var p         := PIECE_SCENE.instantiate()
+		piece_container.add_child(p)
+		p.position = Vector2(lx, r4_ly)
+		p.scale    = Vector2.ZERO
+		_bgm_volume_pieces.append(p)
+		_bgm_volume_rects.append(Rect2(Vector2(sx - GRID_STEP / 2.0, r4c0_sy - GRID_STEP / 2.0), Vector2(GRID_STEP, GRID_STEP)))
 
-	# TIMER 文字欄（col 2，rows 0-4）：棋子 + 字母
+	# ── Row 0: TIMER 標題 + ON/OFF（水平） ──────────────────────────────
 	const TIMER_WORD := "TIMER"
-	var timer_col_x: float = (2 - BOARD_SIZE / 2.0 + 0.5) * GRID_STEP
-	var timer_sx: float    = CENTER_POS.x + timer_col_x - GRID_STEP / 2.0
-	for row in range(5):
-		var ly: float = (row - BOARD_SIZE / 2.0 + 0.5) * GRID_STEP
-		var sy: float = CENTER_POS.y + ly - GRID_STEP / 2.0
-		var tp := PIECE_SCENE.instantiate()
-		piece_container.add_child(tp)
-		tp.position = Vector2(timer_col_x, ly)
-		tp.scale    = Vector2.ZERO
-		tp.set_piece_type(1)
-		tp.modulate = Color.WHITE
-		_volume_pieces.append(tp)  # 借用動畫陣列，下方 all_pieces 會包含
-
+	var r0_ly: float = (0 - BOARD_SIZE / 2.0 + 0.5) * GRID_STEP
+	# cols 0-4: TIMER 標題
+	for c in range(5):
+		var lx: float = (c - BOARD_SIZE / 2.0 + 0.5) * GRID_STEP
+		var sx: float = CENTER_POS.x + lx
+		var sy: float = CENTER_POS.y + r0_ly
+		var fp        := PIECE_SCENE.instantiate()
+		piece_container.add_child(fp)
+		fp.position = Vector2(lx, r0_ly)
+		fp.scale    = Vector2.ZERO
+		fp.set_piece_type(1)
+		_filler_pieces.append(fp)
 		var lbl         := Label.new()
-		lbl.text         = TIMER_WORD[row]
+		lbl.text         = TIMER_WORD[c]
 		lbl.add_theme_font_override("font", MENU_FONT)
 		lbl.add_theme_font_size_override("font_size", 42)
 		lbl.add_theme_color_override("font_color", Color.WHITE)
 		lbl.add_theme_constant_override("outline_size", 2)
 		lbl.add_theme_color_override("font_outline_color", Color.BLACK)
 		lbl.size                 = Vector2(GRID_STEP, GRID_STEP)
-		lbl.position             = Vector2(timer_sx, sy)
+		lbl.position             = Vector2(sx - GRID_STEP / 2.0, sy - GRID_STEP / 2.0)
 		lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		lbl.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
 		lbl.mouse_filter         = Control.MOUSE_FILTER_IGNORE
 		_setup_container.add_child(lbl)
-
-	# 切換棋子（col 2，row 5）：白色 = ON，棕色 = OFF
-	var toggle_ly: float = (5 - BOARD_SIZE / 2.0 + 0.5) * GRID_STEP
-	var toggle_sy: float = CENTER_POS.y + toggle_ly - GRID_STEP / 2.0
-	_time_toggle_piece          = PIECE_SCENE.instantiate()
+	# col 5: timer ON/OFF 開關
+	var r0c5_lx: float = (5 - BOARD_SIZE / 2.0 + 0.5) * GRID_STEP
+	var r0c5_sx: float = CENTER_POS.x + r0c5_lx
+	var r0c5_sy: float = CENTER_POS.y + r0_ly
+	_time_toggle_piece = PIECE_SCENE.instantiate()
 	piece_container.add_child(_time_toggle_piece)
-	_time_toggle_piece.position = Vector2(timer_col_x, toggle_ly)
+	_time_toggle_piece.position = Vector2(r0c5_lx, r0_ly)
 	_time_toggle_piece.scale    = Vector2.ZERO
-	_time_toggle_rect           = Rect2(Vector2(timer_sx, toggle_sy), Vector2(GRID_STEP, GRID_STEP))
-
-	_timer_toggle_label              = Label.new()
+	_time_toggle_rect = Rect2(Vector2(r0c5_sx - GRID_STEP / 2.0, r0c5_sy - GRID_STEP / 2.0), Vector2(GRID_STEP, GRID_STEP))
+	_timer_toggle_label = Label.new()
 	_timer_toggle_label.add_theme_font_override("font", MENU_FONT)
 	_timer_toggle_label.add_theme_font_size_override("font_size", 28)
 	_timer_toggle_label.add_theme_constant_override("outline_size", 2)
 	_timer_toggle_label.add_theme_color_override("font_outline_color", Color.BLACK)
 	_timer_toggle_label.size                 = Vector2(GRID_STEP, GRID_STEP)
-	_timer_toggle_label.position             = Vector2(timer_sx, toggle_sy)
+	_timer_toggle_label.position             = Vector2(r0c5_sx - GRID_STEP / 2.0, r0c5_sy - GRID_STEP / 2.0)
 	_timer_toggle_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_timer_toggle_label.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
 	_timer_toggle_label.mouse_filter         = Control.MOUSE_FILTER_IGNORE
 	_setup_container.add_child(_timer_toggle_label)
 
-	# 填充棋子（cols 3-5，全 6 排）+ 數字顯示 + +/- 按鈕
-	_filler_pieces.clear()
-	for fc in range(3, BOARD_SIZE):
-		for fr in range(BOARD_SIZE):
-			var flx: float = (fc - BOARD_SIZE / 2.0 + 0.5) * GRID_STEP
-			var fly: float = (fr - BOARD_SIZE / 2.0 + 0.5) * GRID_STEP
-			var fp          := PIECE_SCENE.instantiate()
-			piece_container.add_child(fp)
-			fp.position = Vector2(flx, fly)
-			fp.scale    = Vector2.ZERO
-			fp.set_piece_type(2 if fr == 2 else 1)
-			_filler_pieces.append(fp)
-
-	# 數字顯示（cols 3-5，row 2）：每格一位數
-	_digit_labels.clear()
-	var digit_row_top: float = CENTER_POS.y + (2 - BOARD_SIZE / 2.0) * GRID_STEP
-	for dc in range(3):
-		var dsx: float = CENTER_POS.x + (3 + dc - BOARD_SIZE / 2.0) * GRID_STEP
-		var dlbl        := Label.new()
+	# ── Row 1: TIMER 控制 ────────────────────────────────────────────────
+	var r1_ly: float  = (1 - BOARD_SIZE / 2.0 + 0.5) * GRID_STEP
+	var r1_sy: float  = CENTER_POS.y + r1_ly
+	# col 0: -1 按鈕
+	var r1c0_lx: float = (0 - BOARD_SIZE / 2.0 + 0.5) * GRID_STEP
+	var r1c0_sx: float = CENTER_POS.x + r1c0_lx
+	var m1_fp          := PIECE_SCENE.instantiate()
+	piece_container.add_child(m1_fp)
+	m1_fp.position = Vector2(r1c0_lx, r1_ly)
+	m1_fp.scale    = Vector2.ZERO
+	m1_fp.set_piece_type(1)
+	_time_row1_backing.append(m1_fp)
+	_time_minus1_symbol = preload("res://code/btn_symbol.gd").new()
+	piece_container.add_child(_time_minus1_symbol)
+	(_time_minus1_symbol as Node2D).position = Vector2(r1c0_lx, r1_ly)
+	_time_minus1_symbol.call("setup", false, GRID_STEP)
+	(_time_minus1_symbol as Node2D).scale = Vector2.ZERO
+	_time_minus1_rect = Rect2(Vector2(r1c0_sx - GRID_STEP / 2.0, r1_sy - GRID_STEP / 2.0), Vector2(GRID_STEP, GRID_STEP))
+	# cols 1-3: 數字顯示
+	for c in range(1, 4):
+		var lx: float = (c - BOARD_SIZE / 2.0 + 0.5) * GRID_STEP
+		var sx: float = CENTER_POS.x + lx
+		var dp        := PIECE_SCENE.instantiate()
+		piece_container.add_child(dp)
+		dp.position = Vector2(lx, r1_ly)
+		dp.scale    = Vector2.ZERO
+		dp.set_piece_type(2)
+		_time_row1_backing.append(dp)
+		var dlbl := Label.new()
 		dlbl.add_theme_font_override("font", MENU_FONT)
 		dlbl.add_theme_font_size_override("font_size", 42)
 		dlbl.add_theme_color_override("font_color", Color.BLACK)
 		dlbl.add_theme_constant_override("outline_size", 0)
 		dlbl.size                 = Vector2(GRID_STEP, GRID_STEP)
-		dlbl.position             = Vector2(dsx, digit_row_top)
+		dlbl.position             = Vector2(sx - GRID_STEP / 2.0, r1_sy - GRID_STEP / 2.0)
 		dlbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		dlbl.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
 		dlbl.mouse_filter         = Control.MOUSE_FILTER_IGNORE
 		_setup_container.add_child(dlbl)
 		_digit_labels.append(dlbl)
 	_time_value_rect = Rect2(
-		Vector2(CENTER_POS.x + (3 - BOARD_SIZE / 2.0) * GRID_STEP, digit_row_top),
+		Vector2(CENTER_POS.x + (1 - BOARD_SIZE / 2.0) * GRID_STEP, r1_sy - GRID_STEP / 2.0),
 		Vector2(3.0 * GRID_STEP, GRID_STEP)
 	)
-
-	# 小 "-1" / "+1" 符號（col 3/5，row 4）
-	var sm_ly: float = (4 - BOARD_SIZE / 2.0 + 0.5) * GRID_STEP
-	var sm_lx3: float = (3 - BOARD_SIZE / 2.0 + 0.5) * GRID_STEP
-	var sm_lx5: float = (5 - BOARD_SIZE / 2.0 + 0.5) * GRID_STEP
-	_time_minus1_symbol = preload("res://code/btn_symbol.gd").new()
-	piece_container.add_child(_time_minus1_symbol)
-	(_time_minus1_symbol as Node2D).position = Vector2(sm_lx3, sm_ly)
-	_time_minus1_symbol.call("setup", false, GRID_STEP * 0.60)
-	(_time_minus1_symbol as Node2D).scale = Vector2.ZERO
-	_time_minus1_rect = Rect2(
-		Vector2(CENTER_POS.x + sm_lx3 - GRID_STEP / 2.0, CENTER_POS.y + sm_ly - GRID_STEP / 2.0),
-		Vector2(GRID_STEP, GRID_STEP)
-	)
+	# col 4: +1 按鈕
+	var r1c4_lx: float = (4 - BOARD_SIZE / 2.0 + 0.5) * GRID_STEP
+	var r1c4_sx: float = CENTER_POS.x + r1c4_lx
+	var p1_fp          := PIECE_SCENE.instantiate()
+	piece_container.add_child(p1_fp)
+	p1_fp.position = Vector2(r1c4_lx, r1_ly)
+	p1_fp.scale    = Vector2.ZERO
+	p1_fp.set_piece_type(1)
+	_time_row1_backing.append(p1_fp)
 	_time_plus1_symbol = preload("res://code/btn_symbol.gd").new()
 	piece_container.add_child(_time_plus1_symbol)
-	(_time_plus1_symbol as Node2D).position = Vector2(sm_lx5, sm_ly)
-	_time_plus1_symbol.call("setup", true, GRID_STEP * 0.60)
+	(_time_plus1_symbol as Node2D).position = Vector2(r1c4_lx, r1_ly)
+	_time_plus1_symbol.call("setup", true, GRID_STEP)
 	(_time_plus1_symbol as Node2D).scale = Vector2.ZERO
-	_time_plus1_rect = Rect2(
-		Vector2(CENTER_POS.x + sm_lx5 - GRID_STEP / 2.0, CENTER_POS.y + sm_ly - GRID_STEP / 2.0),
-		Vector2(GRID_STEP, GRID_STEP)
-	)
+	_time_plus1_rect = Rect2(Vector2(r1c4_sx - GRID_STEP / 2.0, r1_sy - GRID_STEP / 2.0), Vector2(GRID_STEP, GRID_STEP))
+	# col 5: 空白填充
+	var r1c5_lx: float = (5 - BOARD_SIZE / 2.0 + 0.5) * GRID_STEP
+	var r1c5_fp        := PIECE_SCENE.instantiate()
+	piece_container.add_child(r1c5_fp)
+	r1c5_fp.position = Vector2(r1c5_lx, r1_ly)
+	r1c5_fp.scale    = Vector2.ZERO
+	r1c5_fp.set_piece_type(1)
+	_filler_pieces.append(r1c5_fp)
 
-	# "–" 符號（col 3，row 5）：繪製版，完全置中
-	var minus_lx: float = (3 - BOARD_SIZE / 2.0 + 0.5) * GRID_STEP
-	var minus_ly: float = (5 - BOARD_SIZE / 2.0 + 0.5) * GRID_STEP
-	_time_minus_symbol = preload("res://code/btn_symbol.gd").new()
-	piece_container.add_child(_time_minus_symbol)
-	(_time_minus_symbol as Node2D).position = Vector2(minus_lx, minus_ly)
-	_time_minus_symbol.call("setup", false, GRID_STEP)
-	(_time_minus_symbol as Node2D).scale = Vector2.ZERO
-	_time_minus_rect = Rect2(
-		Vector2(CENTER_POS.x + minus_lx - GRID_STEP / 2.0, CENTER_POS.y + minus_ly - GRID_STEP / 2.0),
-		Vector2(GRID_STEP, GRID_STEP)
-	)
+	# ── Row 2: EXTRA 標題（水平） ────────────────────────────────────────
+	const EXTRA_WORD := "EXTRA"
+	var r2_ly: float = (2 - BOARD_SIZE / 2.0 + 0.5) * GRID_STEP
+	for c in range(5):
+		var lx: float = (c - BOARD_SIZE / 2.0 + 0.5) * GRID_STEP
+		var sx: float = CENTER_POS.x + lx
+		var sy: float = CENTER_POS.y + r2_ly
+		var fp        := PIECE_SCENE.instantiate()
+		piece_container.add_child(fp)
+		fp.position = Vector2(lx, r2_ly)
+		fp.scale    = Vector2.ZERO
+		fp.set_piece_type(1)
+		_filler_pieces.append(fp)
+		var lbl         := Label.new()
+		lbl.text         = EXTRA_WORD[c]
+		lbl.add_theme_font_override("font", MENU_FONT)
+		lbl.add_theme_font_size_override("font_size", 42)
+		lbl.add_theme_color_override("font_color", Color.WHITE)
+		lbl.add_theme_constant_override("outline_size", 2)
+		lbl.add_theme_color_override("font_outline_color", Color.BLACK)
+		lbl.size                 = Vector2(GRID_STEP, GRID_STEP)
+		lbl.position             = Vector2(sx - GRID_STEP / 2.0, sy - GRID_STEP / 2.0)
+		lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		lbl.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
+		lbl.mouse_filter         = Control.MOUSE_FILTER_IGNORE
+		_setup_container.add_child(lbl)
+	# col 5: EXTRA ON/OFF 開關
+	var r2c5_lx: float = (5 - BOARD_SIZE / 2.0 + 0.5) * GRID_STEP
+	var r2c5_sx: float = CENTER_POS.x + r2c5_lx
+	var r2c5_sy: float = CENTER_POS.y + r2_ly
+	_new_rule_piece = PIECE_SCENE.instantiate()
+	piece_container.add_child(_new_rule_piece)
+	_new_rule_piece.position = Vector2(r2c5_lx, r2_ly)
+	_new_rule_piece.scale    = Vector2.ZERO
+	_new_rule_toggle_rect = Rect2(Vector2(r2c5_sx - GRID_STEP / 2.0, r2c5_sy - GRID_STEP / 2.0), Vector2(GRID_STEP, GRID_STEP))
+	_new_rule_label = Label.new()
+	_new_rule_label.add_theme_font_override("font", MENU_FONT)
+	_new_rule_label.add_theme_font_size_override("font_size", 28)
+	_new_rule_label.add_theme_constant_override("outline_size", 2)
+	_new_rule_label.add_theme_color_override("font_outline_color", Color.BLACK)
+	_new_rule_label.size                 = Vector2(GRID_STEP, GRID_STEP)
+	_new_rule_label.position             = Vector2(r2c5_sx - GRID_STEP / 2.0, r2c5_sy - GRID_STEP / 2.0)
+	_new_rule_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_new_rule_label.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
+	_new_rule_label.mouse_filter         = Control.MOUSE_FILTER_IGNORE
+	_setup_container.add_child(_new_rule_label)
 
-	# "+" 符號（col 5，row 5）
-	var plus_lx: float = (5 - BOARD_SIZE / 2.0 + 0.5) * GRID_STEP
-	var plus_ly: float = minus_ly
-	_time_plus_symbol = preload("res://code/btn_symbol.gd").new()
-	piece_container.add_child(_time_plus_symbol)
-	(_time_plus_symbol as Node2D).position = Vector2(plus_lx, plus_ly)
-	_time_plus_symbol.call("setup", true, GRID_STEP)
-	(_time_plus_symbol as Node2D).scale = Vector2.ZERO
-	_time_plus_rect = Rect2(
-		Vector2(CENTER_POS.x + plus_lx - GRID_STEP / 2.0, CENTER_POS.y + plus_ly - GRID_STEP / 2.0),
-		Vector2(GRID_STEP, GRID_STEP)
-	)
+	# ── Row 3: 空白填充 + ? ───────────────────────────────────────────────
+	var r3_ly: float = (3 - BOARD_SIZE / 2.0 + 0.5) * GRID_STEP
+	var r3_sy: float = CENTER_POS.y + r3_ly
+	# cols 0-4: 空白填充
+	for c in range(5):
+		var lx: float = (c - BOARD_SIZE / 2.0 + 0.5) * GRID_STEP
+		var fp        := PIECE_SCENE.instantiate()
+		piece_container.add_child(fp)
+		fp.position = Vector2(lx, r3_ly)
+		fp.scale    = Vector2.ZERO
+		fp.set_piece_type(1)
+		_filler_pieces.append(fp)
+	var r3c5_lx: float = (5 - BOARD_SIZE / 2.0 + 0.5) * GRID_STEP
+	var r3c5_sx: float = CENTER_POS.x + r3c5_lx
+	_question_piece = PIECE_SCENE.instantiate()
+	piece_container.add_child(_question_piece)
+	_question_piece.position = Vector2(r3c5_lx, r3_ly)
+	_question_piece.scale    = Vector2.ZERO
+	_question_piece.set_piece_type(2)
+	_question_rect = Rect2(Vector2(r3c5_sx - GRID_STEP / 2.0, r3_sy - GRID_STEP / 2.0), Vector2(GRID_STEP, GRID_STEP))
+	var q_lbl         := Label.new()
+	q_lbl.text         = "?"
+	q_lbl.add_theme_font_override("font", MENU_FONT)
+	q_lbl.add_theme_font_size_override("font_size", 42)
+	q_lbl.add_theme_color_override("font_color", Color.BLACK)
+	q_lbl.add_theme_constant_override("outline_size", 0)
+	q_lbl.size                 = Vector2(GRID_STEP, GRID_STEP)
+	q_lbl.position             = Vector2(r3c5_sx - GRID_STEP / 2.0, r3_sy - GRID_STEP / 2.0)
+	q_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	q_lbl.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
+	q_lbl.mouse_filter         = Control.MOUSE_FILTER_IGNORE
+	_setup_container.add_child(q_lbl)
 
-	# 返回按鈕
-	var vp   := get_viewport_rect().size
-	var back := Label.new()
-	back.text = "< BACK"
-	back.add_theme_font_override("font", MENU_FONT)
-	back.add_theme_font_size_override("font_size", 28)
-	back.add_theme_color_override("font_color", Color.WHITE)
-	back.add_theme_constant_override("outline_size", 2)
-	back.add_theme_color_override("font_outline_color", Color.BLACK)
-	back.size             = Vector2(320.0, 64.0)
-	back.position         = Vector2(60.0, vp.y - 110.0)
-	back.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
-	back.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
-	back.mouse_filter     = Control.MOUSE_FILTER_IGNORE
-	_setup_container.add_child(back)
-	_setup_back_btn_rect = Rect2(Vector2(60.0, vp.y - 110.0), Vector2(320.0, 64.0))
+	# ── 返回按鈕 ─────────────────────────────────────────────────────────
+	var nav_sz_b   := int(vp.y * 0.033)
+	var nav_btn_h_b := vp.y * 0.10
+	var nav_margin_b := vp.x * 0.015
+	var nav_btn_y_b := CENTER_POS.y + (BOARD_SIZE / 2.0 - 0.5) * GRID_STEP - nav_btn_h_b * 0.5 + GRID_STEP * 0.30
+	var back_x_b   := vp.x * 0.04
+	var back_y_b   := vp.y - nav_btn_h_b - vp.y * 0.04
+	var back_gap_b := nav_sz_b * 0.4
+	var back_arrow := Label.new()
+	back_arrow.text = "<"
+	back_arrow.add_theme_font_override("font", MENU_FONT)
+	back_arrow.add_theme_font_size_override("font_size", nav_sz_b)
+	back_arrow.add_theme_color_override("font_color", Color.WHITE)
+	back_arrow.add_theme_constant_override("outline_size", 2)
+	back_arrow.add_theme_color_override("font_outline_color", Color.BLACK)
+	back_arrow.size                 = Vector2(nav_sz_b + back_gap_b, nav_btn_h_b)
+	back_arrow.position             = Vector2(back_x_b, back_y_b)
+	back_arrow.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	back_arrow.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
+	back_arrow.mouse_filter         = Control.MOUSE_FILTER_IGNORE
+	_setup_container.add_child(back_arrow)
+	var back_text := Label.new()
+	back_text.text = "BACK"
+	back_text.add_theme_font_override("font", MENU_FONT)
+	back_text.add_theme_font_size_override("font_size", nav_sz_b)
+	back_text.add_theme_color_override("font_color", Color.WHITE)
+	back_text.add_theme_constant_override("outline_size", 2)
+	back_text.add_theme_color_override("font_outline_color", Color.BLACK)
+	back_text.size                 = Vector2(vp.x * 0.20, nav_btn_h_b)
+	back_text.position             = Vector2(back_x_b + nav_sz_b + back_gap_b, back_y_b)
+	back_text.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	back_text.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
+	back_text.mouse_filter         = Control.MOUSE_FILTER_IGNORE
+	_setup_container.add_child(back_text)
+	_setup_back_btn_rect = Rect2(Vector2(back_x_b, back_y_b), Vector2(vp.x * 0.25, nav_btn_h_b))
 
 	_update_volume_display()
 	_update_bgm_volume_display()
 	_update_time_toggle_display()
+	_update_new_rule_display()
 
 
 func _update_time_toggle_display() -> void:
@@ -926,6 +1093,16 @@ func _update_time_toggle_display() -> void:
 	_update_time_value_display()
 
 
+func _update_new_rule_display() -> void:
+	if not is_instance_valid(_new_rule_piece): return
+	_new_rule_piece.set_piece_type(2 if _new_rule_enabled else 1)
+	_new_rule_piece.modulate = Color.WHITE
+	if is_instance_valid(_new_rule_label):
+		_new_rule_label.text = "ON" if _new_rule_enabled else "OFF"
+		_new_rule_label.add_theme_color_override("font_color",
+			Color.BLACK if _new_rule_enabled else Color.WHITE)
+
+
 func _update_time_value_display() -> void:
 	if _digit_labels.is_empty(): return
 	var s := str(_time_limit_seconds)
@@ -937,10 +1114,9 @@ func _update_time_value_display() -> void:
 	var alpha := 1.0 if _time_limit_enabled else 0.30
 	for dlbl in _digit_labels:
 		dlbl.modulate.a = alpha
-	if is_instance_valid(_time_minus_symbol):
-		_time_minus_symbol.modulate.a = alpha
-	if is_instance_valid(_time_plus_symbol):
-		_time_plus_symbol.modulate.a = alpha
+	for bp in _time_row1_backing:
+		if is_instance_valid(bp):
+			bp.modulate.a = alpha
 	if is_instance_valid(_time_minus1_symbol):
 		_time_minus1_symbol.modulate.a = alpha
 	if is_instance_valid(_time_plus1_symbol):
@@ -958,12 +1134,16 @@ func _show_time_input() -> void:
 	overlay.size  = vp
 	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
 	_time_input_layer.add_child(overlay)
-	overlay.gui_input.connect(func(ev: InputEvent) -> void:
-		var fired: bool = (ev is InputEventMouseButton and ev.button_index == MOUSE_BUTTON_LEFT and ev.pressed) \
-					   or (ev is InputEventScreenTouch and ev.pressed)
-		if fired and _time_input_edit != null:
-			_apply_time_input(_time_input_edit.text)
-	)
+	# 延遲到下一 frame 再 connect，避免建立 overlay 的同一個 click 立刻把它關掉
+	get_tree().process_frame.connect(func():
+		if not is_instance_valid(overlay): return
+		overlay.gui_input.connect(func(ev: InputEvent) -> void:
+			var fired: bool = (ev is InputEventMouseButton and ev.button_index == MOUSE_BUTTON_LEFT and ev.pressed) \
+						   or (ev is InputEventScreenTouch and ev.pressed)
+			if fired and _time_input_edit != null:
+				_apply_time_input(_time_input_edit.text)
+		)
+	, CONNECT_ONE_SHOT)
 	var pw  := vp.x * 0.48
 	var ph  := vp.y * 0.32
 	var px  := (vp.x - pw) / 2.0
@@ -1020,11 +1200,11 @@ func _apply_time_input(text: String) -> void:
 func _update_volume_display() -> void:
 	if _volume_pieces.is_empty():
 		return
-	for r in range(5):
-		var p = _volume_pieces[r]
+	for i in range(5):
+		var p = _volume_pieces[i]
 		if not is_instance_valid(p):
 			continue
-		if _is_muted or r < (5 - _volume_level):
+		if _is_muted or i >= _volume_level:
 			p.set_piece_type(1)
 			p.modulate = Color(1.0, 1.0, 1.0, 0.30)
 		else:
@@ -1037,20 +1217,23 @@ func _update_volume_display() -> void:
 
 
 func _apply_volume() -> void:
+	var bus_idx := AudioServer.get_bus_index("SFX")
+	if bus_idx < 0:
+		return
 	if _is_muted or _volume_level == 0:
-		AudioServer.set_bus_volume_db(0, -80.0)
+		AudioServer.set_bus_volume_db(bus_idx, -80.0)
 	else:
-		AudioServer.set_bus_volume_db(0, linear_to_db(float(_volume_level) / 5.0))
+		AudioServer.set_bus_volume_db(bus_idx, 10.0 - float(5 - _volume_level) * 4.5)
 
 
 func _update_bgm_volume_display() -> void:
 	if _bgm_volume_pieces.is_empty():
 		return
-	for r in range(5):
-		var p = _bgm_volume_pieces[r]
+	for i in range(5):
+		var p = _bgm_volume_pieces[i]
 		if not is_instance_valid(p):
 			continue
-		if _bgm_is_muted or r < (5 - _bgm_volume_level):
+		if _bgm_is_muted or i >= _bgm_volume_level:
 			p.set_piece_type(1)
 			p.modulate = Color(1.0, 1.0, 1.0, 0.30)
 		else:
@@ -1069,7 +1252,7 @@ func _apply_bgm_volume() -> void:
 	if _bgm_is_muted or _bgm_volume_level == 0:
 		AudioServer.set_bus_volume_db(bus_idx, -80.0)
 	else:
-		AudioServer.set_bus_volume_db(bus_idx, linear_to_db(float(_bgm_volume_level) / 5.0))
+		AudioServer.set_bus_volume_db(bus_idx, -float(5 - _bgm_volume_level) * 5.0)
 
 func _pulse_symbol(sym: Node) -> void:
 	if not is_instance_valid(sym): return
@@ -1089,35 +1272,52 @@ func _go_back_from_setup() -> void:
 
 	# 縮回動畫：對角波從右上往左下 wave = col + (BOARD_SIZE-1-row)，delay 反轉
 	var wave_map2: Dictionary = {}
-	for r in range(5):
-		var w: int = BOARD_SIZE - 1 - r
-		if not wave_map2.has(w): wave_map2[w] = []
-		wave_map2[w].append(_volume_pieces[r])
-	for r in range(5):
-		var w: int = 1 + BOARD_SIZE - 1 - r
-		if not wave_map2.has(w): wave_map2[w] = []
-		wave_map2[w].append(_bgm_volume_pieces[r])
-	for r in range(5):
-		var w: int = 2 + BOARD_SIZE - 1 - r
-		if not wave_map2.has(w): wave_map2[w] = []
-		wave_map2[w].append(_volume_pieces[5 + r])
 	if not wave_map2.has(0): wave_map2[0] = []
 	wave_map2[0].append(_note_piece)
 	if is_instance_valid(_note_icon): wave_map2[0].append(_note_icon)
+	for i in range(5):
+		var w: int = i + 1
+		if not wave_map2.has(w): wave_map2[w] = []
+		wave_map2[w].append(_volume_pieces[i])
 	if not wave_map2.has(1): wave_map2[1] = []
 	wave_map2[1].append(_bgm_note_piece)
 	if is_instance_valid(_bgm_note_icon): wave_map2[1].append(_bgm_note_icon)
+	for i in range(5):
+		var w: int = i + 2
+		if not wave_map2.has(w): wave_map2[w] = []
+		wave_map2[w].append(_bgm_volume_pieces[i])
 	if not wave_map2.has(2): wave_map2[2] = []
-	wave_map2[2].append(_time_toggle_piece)
-	for fc in range(3, BOARD_SIZE):
-		for fr in range(BOARD_SIZE):
-			var w: int = fc + BOARD_SIZE - 1 - fr
-			if not wave_map2.has(w): wave_map2[w] = []
-			wave_map2[w].append(_filler_pieces[(fc - 3) * BOARD_SIZE + fr])
-	if is_instance_valid(_time_minus_symbol):  wave_map2[3].append(_time_minus_symbol)
-	if is_instance_valid(_time_plus_symbol):   wave_map2[5].append(_time_plus_symbol)
+	wave_map2[2].append(_filler_pieces[11])
+	for i in range(4):
+		var w: int = i + 3
+		if not wave_map2.has(w): wave_map2[w] = []
+		wave_map2[w].append(_filler_pieces[12 + i])
+	if not wave_map2.has(7): wave_map2[7] = []
+	wave_map2[7].append(_question_piece)
+	for i in range(5):
+		var w: int = i + 3
+		if not wave_map2.has(w): wave_map2[w] = []
+		wave_map2[w].append(_filler_pieces[6 + i])
+	if not wave_map2.has(8): wave_map2[8] = []
+	wave_map2[8].append(_new_rule_piece)
+	if not wave_map2.has(4): wave_map2[4] = []
+	wave_map2[4].append(_time_row1_backing[0])
 	if is_instance_valid(_time_minus1_symbol): wave_map2[4].append(_time_minus1_symbol)
-	if is_instance_valid(_time_plus1_symbol):  wave_map2[6].append(_time_plus1_symbol)
+	for i in range(3):
+		var w: int = i + 5
+		if not wave_map2.has(w): wave_map2[w] = []
+		wave_map2[w].append(_time_row1_backing[1 + i])
+	if not wave_map2.has(8): wave_map2[8] = []
+	wave_map2[8].append(_time_row1_backing[4])
+	if is_instance_valid(_time_plus1_symbol): wave_map2[8].append(_time_plus1_symbol)
+	if not wave_map2.has(9): wave_map2[9] = []
+	wave_map2[9].append(_filler_pieces[5])
+	for i in range(5):
+		var w: int = i + 5
+		if not wave_map2.has(w): wave_map2[w] = []
+		wave_map2[w].append(_filler_pieces[i])
+	if not wave_map2.has(10): wave_map2[10] = []
+	wave_map2[10].append(_time_toggle_piece)
 	var sorted_w2: Array = wave_map2.keys()
 	sorted_w2.sort()
 	var max_wave2: int = sorted_w2[-1]
@@ -1194,32 +1394,242 @@ func _destroy_setup_ui() -> void:
 	_time_toggle_rect   = Rect2()
 	_timer_toggle_label = null
 	_filler_pieces.clear()
+	_time_row1_backing.clear()
 	_digit_labels.clear()
-	_time_minus_symbol  = null
-	_time_plus_symbol   = null
 	_time_minus1_symbol = null
 	_time_plus1_symbol  = null
 	_time_value_rect    = Rect2()
-	_time_minus_rect    = Rect2()
-	_time_plus_rect     = Rect2()
 	_time_minus1_rect   = Rect2()
 	_time_plus1_rect    = Rect2()
 	if is_instance_valid(_time_input_layer):
 		_time_input_layer.queue_free()
-	_time_input_layer = null
+	_time_input_layer     = null
+	_new_rule_piece        = null
+	_new_rule_toggle_rect  = Rect2()
+	_new_rule_label        = null
+	_question_piece = null
+	_question_rect  = Rect2()
+
+
+func _show_rules2() -> void:
+	if _in_rules2 or is_animating:
+		return
+	is_animating = true
+	_in_rules2             = true
+	_rules_came_from_setup = true
+
+	var dur    := 0.75
+	var exit_x := CENTER_POS.x + 1500.0
+	_audio.play_rotation(dur)
+
+	_setup_container.hide()
+
+	var slide = create_tween().set_parallel(true)
+	slide.tween_property(board_container, "position:x", exit_x, dur).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	slide.tween_property(board_container, "rotation", board_container.rotation + TAU * 1.5, dur).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	await slide.finished
+
+	_create_rules2_ui()
+	var fade_in = create_tween()
+	fade_in.tween_property(_rules2_container, "modulate:a", 1.0, 0.45).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	await fade_in.finished
+	is_animating = false
+
+
+func _create_rules2_ui() -> void:
+	_rules2_container = Node2D.new()
+	_rules2_container.modulate.a = 0.0
+	add_child(_rules2_container)
+
+	var vp := get_viewport_rect().size
+
+	const HEADING_SIZE := 50
+	const BODY_SIZE    := 20
+	const HEAD_H       := HEADING_SIZE * 1.6
+	const LINE_H       := BODY_SIZE    * 2.8
+	const BLANK_SM     := BODY_SIZE    * 1.2
+	const BLANK_LG     := BODY_SIZE    * 2.0
+
+	var lines: Array = [
+		["EXTRA RULE",                                HEADING_SIZE, HEAD_H  ],
+		["LAST CHANCE",                               HEADING_SIZE, HEAD_H  ],
+		["",                                          0,            BLANK_SM],
+		["When Black connects 4 by placing a piece,", BODY_SIZE,   LINE_H  ],
+		["White may place one final piece.",          BODY_SIZE,   LINE_H  ],
+		["",                                          0,            BLANK_LG],
+		["If White connects 4 -> White wins.",        BODY_SIZE,   LINE_H  ],
+		["If White cannot connect 4 -> Black wins.",  BODY_SIZE,   LINE_H  ],
+		["",                                          0,            BLANK_LG],
+		["Note: This rule does not apply",            BODY_SIZE,   LINE_H  ],
+		["if 4-in-a-row is formed after rotation.",   BODY_SIZE,   LINE_H  ],
+	]
+
+	var total_h := 0.0
+	for l in lines:
+		total_h += float(l[2])
+	var cur_y := (vp.y - total_h) / 2.0
+
+	for line_data in lines:
+		var text: String = line_data[0]
+		var size: int    = line_data[1]
+		var h: float     = float(line_data[2])
+		if text != "":
+			var lbl := Label.new()
+			lbl.text = text
+			lbl.add_theme_font_override("font", MENU_FONT)
+			lbl.add_theme_font_size_override("font_size", size)
+			lbl.add_theme_color_override("font_color", Color.WHITE)
+			lbl.add_theme_constant_override("outline_size", 2)
+			lbl.add_theme_color_override("font_outline_color", Color.BLACK)
+			lbl.size                 = Vector2(vp.x, h)
+			lbl.position             = Vector2(0.0, cur_y)
+			lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+			lbl.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
+			lbl.mouse_filter         = Control.MOUSE_FILTER_IGNORE
+			_rules2_container.add_child(lbl)
+		cur_y += h
+
+	var nav_sz     := int(vp.y * 0.033)
+	var nav_btn_w  := vp.x * 0.10
+	var nav_btn_h  := vp.y * 0.10
+	var nav_margin := vp.x * 0.015
+	var nav_btn_y  := CENTER_POS.y + (BOARD_SIZE / 2.0 - 0.5) * GRID_STEP - nav_btn_h * 0.5 + GRID_STEP * 0.30
+
+	var back_x   := vp.x * 0.04
+	var back_y   := vp.y - nav_btn_h - vp.y * 0.04
+	var back_gap := nav_sz * 0.4
+	var back_arrow := Label.new()
+	back_arrow.text = "<"
+	back_arrow.add_theme_font_override("font", MENU_FONT)
+	back_arrow.add_theme_font_size_override("font_size", nav_sz)
+	back_arrow.add_theme_color_override("font_color", Color.WHITE)
+	back_arrow.add_theme_constant_override("outline_size", 2)
+	back_arrow.add_theme_color_override("font_outline_color", Color.BLACK)
+	back_arrow.size                 = Vector2(nav_sz + back_gap, nav_btn_h)
+	back_arrow.position             = Vector2(back_x, back_y)
+	back_arrow.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	back_arrow.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
+	back_arrow.mouse_filter         = Control.MOUSE_FILTER_IGNORE
+	_rules2_container.add_child(back_arrow)
+	var back_text := Label.new()
+	back_text.text = "BACK"
+	back_text.add_theme_font_override("font", MENU_FONT)
+	back_text.add_theme_font_size_override("font_size", nav_sz)
+	back_text.add_theme_color_override("font_color", Color.WHITE)
+	back_text.add_theme_constant_override("outline_size", 2)
+	back_text.add_theme_color_override("font_outline_color", Color.BLACK)
+	back_text.size                 = Vector2(vp.x * 0.20, nav_btn_h)
+	back_text.position             = Vector2(back_x + nav_sz + back_gap, back_y)
+	back_text.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	back_text.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
+	back_text.mouse_filter         = Control.MOUSE_FILTER_IGNORE
+	_rules2_container.add_child(back_text)
+	_rules2_back_rect = Rect2(Vector2(back_x, back_y), Vector2(vp.x * 0.25, nav_btn_h))
+	var nav_left   := Label.new()
+	nav_left.text = "<<"
+	nav_left.add_theme_font_override("font", MENU_FONT)
+	nav_left.add_theme_font_size_override("font_size", nav_sz)
+	nav_left.add_theme_color_override("font_color", Color.WHITE)
+	nav_left.add_theme_constant_override("outline_size", 2)
+	nav_left.add_theme_color_override("font_outline_color", Color.BLACK)
+	nav_left.size                 = Vector2(nav_btn_w, nav_btn_h)
+	nav_left.position             = Vector2(nav_margin, nav_btn_y)
+	nav_left.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	nav_left.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
+	nav_left.mouse_filter         = Control.MOUSE_FILTER_IGNORE
+	_rules2_container.add_child(nav_left)
+	_rules2_nav_left_rect = Rect2(Vector2(nav_margin, nav_btn_y), Vector2(nav_btn_w, nav_btn_h))
+
+
+func _go_back_from_rules2() -> void:
+	if is_animating:
+		return
+	is_animating = true
+	_in_rules2   = false
+
+	var fade_out = create_tween()
+	fade_out.tween_property(_rules2_container, "modulate:a", 0.0, 0.3).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	await fade_out.finished
+
+	if is_instance_valid(_rules2_container):
+		_rules2_container.queue_free()
+	_rules2_container     = null
+	_rules2_back_rect     = Rect2()
+	_rules2_nav_left_rect = Rect2()
+
+	var dur := 0.75
+	_audio.play_rotation(dur)
+
+	var slide = create_tween().set_parallel(true)
+	slide.tween_property(board_container, "position:x", CENTER_POS.x, dur).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	slide.tween_property(board_container, "rotation", 0.0, dur).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	await slide.finished
+
+	if _rules_came_from_setup:
+		_setup_container.show()
+	else:
+		_restore_row(1)
+		label_container.show()
+	is_animating = false
+
+
+func _go_to_rules2_from_rules1() -> void:
+	if is_animating:
+		return
+	is_animating = true
+
+	var fade_out = create_tween()
+	fade_out.tween_property(_rules_container, "modulate:a", 0.0, 0.25).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	await fade_out.finished
+
+	_destroy_rules_ui()
+	_in_rules2 = true
+	_create_rules2_ui()
+
+	var fade_in = create_tween()
+	fade_in.tween_property(_rules2_container, "modulate:a", 1.0, 0.35).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	await fade_in.finished
+	is_animating = false
+
+
+func _go_to_rules1_from_rules2() -> void:
+	if is_animating:
+		return
+	is_animating = true
+
+	var fade_out = create_tween()
+	fade_out.tween_property(_rules2_container, "modulate:a", 0.0, 0.25).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	await fade_out.finished
+
+	if is_instance_valid(_rules2_container):
+		_rules2_container.queue_free()
+	_rules2_container     = null
+	_rules2_back_rect     = Rect2()
+	_rules2_nav_left_rect = Rect2()
+	_in_rules2 = false
+
+	_create_rules_ui()
+
+	var fade_in = create_tween()
+	fade_in.tween_property(_rules_container, "modulate:a", 1.0, 0.35).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	await fade_in.finished
+	is_animating = false
 
 
 func _destroy_rules_ui() -> void:
 	if is_instance_valid(_rules_container):
 		_rules_container.queue_free()
-	_rules_container = null
-	_back_btn_rect = Rect2()
+	_rules_container      = null
+	_back_btn_rect        = Rect2()
+	_rules_nav_right_rect = Rect2()
 
 func _restore_row(row: int) -> void:
 	for p in row_pieces[row]:
+		if not is_instance_valid(p): continue
 		p.modulate = Color.WHITE
 		p.set_piece_type(1)
 	for l in row_labels[row]:
+		if not is_instance_valid(l): continue
 		l.add_theme_color_override("font_color", Color.WHITE)
 
 func _start_game() -> void:
@@ -1265,9 +1675,9 @@ func _start_game() -> void:
 
 	if _ai_mode_pending:
 		_ai_mode_pending = false
-		ai_game_started.emit(_ai_difficulty_pending, _human_player_pending, _time_limit_enabled, _time_limit_seconds)
+		ai_game_started.emit(_ai_difficulty_pending, _human_player_pending, _time_limit_enabled, _time_limit_seconds, _new_rule_enabled)
 	else:
-		game_started.emit(_time_limit_enabled, _time_limit_seconds)
+		game_started.emit(_time_limit_enabled, _time_limit_seconds, _new_rule_enabled)
 
 
 func reinitialize(center: Vector2) -> void:
@@ -1277,6 +1687,11 @@ func reinitialize(center: Vector2) -> void:
 
 	_destroy_rules_ui()
 	_destroy_setup_ui()
+	if is_instance_valid(_rules2_container):
+		_rules2_container.queue_free()
+	_rules2_container = null
+	_rules2_back_rect = Rect2()
+	_in_rules2 = false
 	_in_difficulty_select = false
 	if is_instance_valid(_diff_back_label):
 		_diff_back_label.queue_free()
