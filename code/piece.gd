@@ -13,8 +13,11 @@ func set_piece_type(pid):
 		texture = white_tex
 
 func start_glow():
+	if _glow_tween:
+		_glow_tween.kill()
+		_glow_tween = null
 	var glow_color = Color(2.048, 1.982, 0.526, 1.0) if player_id == 1 else Color(1.461, 0.568, 0.0, 1.0)
-	_glow_tween = create_tween().set_loops()  # 改用 _glow_tween 追蹤，方便外部停止
+	_glow_tween = create_tween().set_loops()
 	_glow_tween.tween_property(self, "modulate", glow_color, 0.45).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 	_glow_tween.tween_property(self, "modulate", Color.WHITE, 0.45).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 
