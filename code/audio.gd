@@ -154,6 +154,7 @@ func _spawn_player(buf: PackedVector2Array, dur: float) -> void:
 	stream.buffer_length = dur + 0.2
 	var player          := AudioStreamPlayer.new()
 	player.stream        = stream
+	player.bus           = "SFX"
 	add_child(player)
 	player.play()
 	await get_tree().process_frame
