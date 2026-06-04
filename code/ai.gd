@@ -2,8 +2,8 @@ extends Node
 
 const BOARD_SIZE  = 6
 const INF_VAL     = 100000
-const DIFF_DEPTH  = [2, 4, 7, 16]
-const DIFF_RANDOM = [0.70, 0.40, 0.10, 0.00]
+const DIFF_DEPTH  = [2, 4, 7, 16, 0]   # index 4 = Test，深度由 _test_depth() 動態決定
+const DIFF_RANDOM = [0.70, 0.40, 0.10, 0.00, 0.02]
 const COL_ORDER   = [2, 3, 1, 4, 0, 5]     # 中間欄優先，同 HTML 版
 
 var _zobrist: Array = []   # _zobrist[piece][col][row]
@@ -45,10 +45,10 @@ func _board_hash(board: Array, turn: int) -> int:
 
 # Returns best column for ai_player to play.
 # board[col][row], row 0 = top, row BOARD_SIZE-1 = bottom
-func best_move(board: Array, ai_player: int, turn_in_round: int, difficulty: int, new_rule: bool = false) -> int:
+func best_move(board: Array, ai_player: int, turn_in_round: int, difficulty: int, new_rule: bool = false, counter_draw: bool = false) -> int:
 	_cancel = false
 	var human:     int   = 3 - ai_player
-	var max_depth: int   = DIFF_DEPTH[difficulty]
+	var max_depth: int   = _test_depth(board) if difficulty == 4 else DIFF_DEPTH[difficulty]
 	var rand_ch:   float = DIFF_RANDOM[difficulty]
 
 	# 強制判斷：在隨機和 minimax 之前執行
@@ -58,7 +58,7 @@ func best_move(board: Array, ai_player: int, turn_in_round: int, difficulty: int
 		var dr := _find_drop_row(board, c)
 		var nb := _drop(board, c, ai_player, dr)
 		if _check_win(nb, ai_player):
-			if new_rule and ai_player == 1:
+			if new_rule and ai_player == 1 and not counter_draw:
 				if not _white_can_win_last_move(nb): return c
 			else:
 				return c
@@ -104,7 +104,7 @@ func best_move(board: Array, ai_player: int, turn_in_round: int, difficulty: int
 
 		# 落子即勝（旋轉前）→ 直接回傳
 		if _check_win(nb, ai_player):
-			if new_rule and ai_player == 1:
+			if new_rule and ai_player == 1 and not counter_draw:
 				if not _white_can_win_last_move(nb): return c
 			else:
 				return c
@@ -114,7 +114,7 @@ func best_move(board: Array, ai_player: int, turn_in_round: int, difficulty: int
 		if turn_in_round == 1:
 			nb_eval = _rotate_and_gravity(nb)
 		var h   := _board_hash(nb_eval, next_turn)
-		var val := _minimax(nb_eval, max_depth - 1, alpha, beta, false, ai_player, human, next_turn, h, new_rule)
+		var val := _minimax(nb_eval, max_depth - 1, alpha, beta, false, ai_player, human, next_turn, h, new_rule, counter_draw)
 		if val > best_val:
 			best_val = val
 			best_col = c
@@ -138,7 +138,7 @@ func _white_can_win_last_move(board: Array) -> bool:
 
 func _minimax(board: Array, depth: int, alpha: int, beta: int,
 			  is_ai_turn: bool, ai_player: int, human: int,
-			  turn: int, board_hash: int, new_rule: bool = false) -> int:
+			  turn: int, board_hash: int, new_rule: bool = false, counter_draw: bool = false) -> int:
 
 	if _cancel: return 0
 
@@ -147,12 +147,15 @@ func _minimax(board: Array, depth: int, alpha: int, beta: int,
 
 	# 新規則：黑方落子連四（turn==1 代表黑方剛落子）→ 白方最後一手
 	if new_rule and turn == 1 and _check_win(board, 1):
-		for c in range(BOARD_SIZE):
-			var dr := _find_drop_row(board, c)
-			if dr < 0: continue
-			if _check_win(_drop(board, c, 2, dr), 2):
-				return (INF_VAL + depth) if (ai_player == 2) else -(INF_VAL + depth)
-		return (INF_VAL + depth) if (ai_player == 1) else -(INF_VAL + depth)
+		if not (counter_draw and ai_player == 1):
+			for c in range(BOARD_SIZE):
+				var dr := _find_drop_row(board, c)
+				if dr < 0: continue
+				if _check_win(_drop(board, c, 2, dr), 2):
+					if counter_draw: return 0   # 白方 AI：反殺 = 平局
+					return (INF_VAL + depth) if (ai_player == 2) else -(INF_VAL + depth)
+			return (INF_VAL + depth) if (ai_player == 1) else -(INF_VAL + depth)
+		# counter_draw + 黑方 AI：直接落到下方 _check_win 當作正常黑方勝，保持進攻性
 
 	if _check_win(board, ai_player):  return  INF_VAL + depth
 	if _check_win(board, human):       return -INF_VAL - depth
@@ -208,7 +211,7 @@ func _minimax(board: Array, depth: int, alpha: int, beta: int,
 		if turn == 1:
 			nh = _board_hash(nb_eval, next_turn)
 
-		var val := _minimax(nb_eval, depth - 1, alpha, beta, not is_ai_turn, ai_player, human, next_turn, nh, new_rule)
+		var val := _minimax(nb_eval, depth - 1, alpha, beta, not is_ai_turn, ai_player, human, next_turn, nh, new_rule, counter_draw)
 
 		if is_ai_turn:
 			if val > best: best = val
@@ -324,3 +327,14 @@ func _win(board: Array, x: int, y: int, dx: int, dy: int, ai: int, human: int) -
 	if hc == 2: return  -3
 	if hc == 1: return  -1
 	return 0
+
+
+func _test_depth(board: Array) -> int:
+	var pieces := 0
+	for c in range(BOARD_SIZE):
+		for r in range(BOARD_SIZE):
+			if board[c][r] != 0:
+				pieces += 1
+	if   pieces <= 5:  return 12
+	elif pieces <= 12: return 14
+	else:              return 15
