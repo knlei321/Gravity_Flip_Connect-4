@@ -118,5 +118,6 @@ func _on_restart() -> void:
 func _on_menu() -> void:
 	is_paused = false
 	get_tree().paused = false
+	_main.unduck_bgm()
 	_destroy_pause_ui()
 	_main.return_to_menu()
