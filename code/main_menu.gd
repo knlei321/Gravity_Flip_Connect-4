@@ -185,6 +185,45 @@ func _add_menu_labels() -> void:
 			label_container.add_child(label)
 			row_labels[menu_row].append(label)
 
+# 建立選單通用 Label（白字、黑框 outline 2、垂直置中、忽略滑鼠）
+func _make_menu_label(text: String, font_size: int, size: Vector2, pos: Vector2, halign := HORIZONTAL_ALIGNMENT_CENTER) -> Label:
+	var lbl := Label.new()
+	lbl.text = text
+	lbl.add_theme_font_override("font", MENU_FONT)
+	lbl.add_theme_font_size_override("font_size", font_size)
+	lbl.add_theme_color_override("font_color", Color.WHITE)
+	lbl.add_theme_constant_override("outline_size", 2)
+	lbl.add_theme_color_override("font_outline_color", Color.BLACK)
+	lbl.size                 = size
+	lbl.position             = pos
+	lbl.horizontal_alignment = halign
+	lbl.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
+	lbl.mouse_filter         = Control.MOUSE_FILTER_IGNORE
+	return lbl
+
+# 左下角「< BACK」按鈕（rules / rules2 / setup 共用），回傳點擊判定 Rect
+func _create_back_button(parent: Node) -> Rect2:
+	var vp        := get_viewport_rect().size
+	var nav_sz    := int(vp.y * 0.033)
+	var nav_btn_h := vp.y * 0.10
+	var back_x    := vp.x * 0.04
+	var back_y    := vp.y - nav_btn_h - vp.y * 0.04
+	var back_gap  := nav_sz * 0.4
+	parent.add_child(_make_menu_label("<", nav_sz, Vector2(nav_sz + back_gap, nav_btn_h), Vector2(back_x, back_y), HORIZONTAL_ALIGNMENT_LEFT))
+	parent.add_child(_make_menu_label("BACK", nav_sz, Vector2(vp.x * 0.20, nav_btn_h), Vector2(back_x + nav_sz + back_gap, back_y), HORIZONTAL_ALIGNMENT_LEFT))
+	return Rect2(Vector2(back_x, back_y), Vector2(vp.x * 0.25, nav_btn_h))
+
+# 左下角單一「<」返回鍵（難度/顏色選擇頁共用），回傳 [Label, Rect2]
+func _create_corner_back() -> Array:
+	var vp := get_viewport_rect().size
+	var bw := vp.x * 0.08
+	var bh := vp.y * 0.10
+	var bx := vp.x * 0.02
+	var by := vp.y - bh - vp.y * 0.03
+	var lbl := _make_menu_label("<", int(vp.y * 0.055), Vector2(bw, bh), Vector2(bx, by))
+	label_container.add_child(lbl)
+	return [lbl, Rect2(Vector2(bx, by), Vector2(bw, bh))]
+
 func _get_row_at(pos: Vector2) -> int:
 	var local = piece_container.to_local(pos)
 	var col = int(floor((local.x + (BOARD_SIZE * GRID_STEP) / 2.0) / GRID_STEP))
@@ -576,19 +615,7 @@ func _create_rules_ui() -> void:
 		var size: int    = line_data[1]
 		var h: float     = float(line_data[2])
 		if text != "":
-			var lbl := Label.new()
-			lbl.text = text
-			lbl.add_theme_font_override("font", MENU_FONT)
-			lbl.add_theme_font_size_override("font_size", size)
-			lbl.add_theme_color_override("font_color", Color.WHITE)
-			lbl.add_theme_constant_override("outline_size", 2)
-			lbl.add_theme_color_override("font_outline_color", Color.BLACK)
-			lbl.size                 = Vector2(vp.x, h)
-			lbl.position             = Vector2(0.0, cur_y)
-			lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-			lbl.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
-			lbl.mouse_filter         = Control.MOUSE_FILTER_IGNORE
-			_rules_container.add_child(lbl)
+			_rules_container.add_child(_make_menu_label(text, size, Vector2(vp.x, h), Vector2(0.0, cur_y)))
 		cur_y += h
 
 	var nav_sz     := int(vp.y * 0.033)
@@ -597,49 +624,8 @@ func _create_rules_ui() -> void:
 	var nav_margin := vp.x * 0.015
 	var nav_btn_y  := CENTER_POS.y + (BOARD_SIZE / 2.0 - 0.5) * GRID_STEP - nav_btn_h * 0.5 + GRID_STEP * 0.30
 
-	var back_x   := vp.x * 0.04
-	var back_y   := vp.y - nav_btn_h - vp.y * 0.04
-	var back_gap := nav_sz * 0.4
-	var back_arrow := Label.new()
-	back_arrow.text = "<"
-	back_arrow.add_theme_font_override("font", MENU_FONT)
-	back_arrow.add_theme_font_size_override("font_size", nav_sz)
-	back_arrow.add_theme_color_override("font_color", Color.WHITE)
-	back_arrow.add_theme_constant_override("outline_size", 2)
-	back_arrow.add_theme_color_override("font_outline_color", Color.BLACK)
-	back_arrow.size                 = Vector2(nav_sz + back_gap, nav_btn_h)
-	back_arrow.position             = Vector2(back_x, back_y)
-	back_arrow.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
-	back_arrow.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
-	back_arrow.mouse_filter         = Control.MOUSE_FILTER_IGNORE
-	_rules_container.add_child(back_arrow)
-	var back_text := Label.new()
-	back_text.text = "BACK"
-	back_text.add_theme_font_override("font", MENU_FONT)
-	back_text.add_theme_font_size_override("font_size", nav_sz)
-	back_text.add_theme_color_override("font_color", Color.WHITE)
-	back_text.add_theme_constant_override("outline_size", 2)
-	back_text.add_theme_color_override("font_outline_color", Color.BLACK)
-	back_text.size                 = Vector2(vp.x * 0.20, nav_btn_h)
-	back_text.position             = Vector2(back_x + nav_sz + back_gap, back_y)
-	back_text.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
-	back_text.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
-	back_text.mouse_filter         = Control.MOUSE_FILTER_IGNORE
-	_rules_container.add_child(back_text)
-	_back_btn_rect = Rect2(Vector2(back_x, back_y), Vector2(vp.x * 0.25, nav_btn_h))
-	var nav_right  := Label.new()
-	nav_right.text = ">>"
-	nav_right.add_theme_font_override("font", MENU_FONT)
-	nav_right.add_theme_font_size_override("font_size", nav_sz)
-	nav_right.add_theme_color_override("font_color", Color.WHITE)
-	nav_right.add_theme_constant_override("outline_size", 2)
-	nav_right.add_theme_color_override("font_outline_color", Color.BLACK)
-	nav_right.size                 = Vector2(nav_btn_w, nav_btn_h)
-	nav_right.position             = Vector2(vp.x - nav_btn_w - nav_margin, nav_btn_y)
-	nav_right.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	nav_right.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
-	nav_right.mouse_filter         = Control.MOUSE_FILTER_IGNORE
-	_rules_container.add_child(nav_right)
+	_back_btn_rect = _create_back_button(_rules_container)
+	_rules_container.add_child(_make_menu_label(">>", nav_sz, Vector2(nav_btn_w, nav_btn_h), Vector2(vp.x - nav_btn_w - nav_margin, nav_btn_y)))
 	_rules_nav_right_rect = Rect2(Vector2(vp.x - nav_btn_w - nav_margin, nav_btn_y), Vector2(nav_btn_w, nav_btn_h))
 
 
@@ -692,59 +678,7 @@ func _show_setup() -> void:
 	_create_setup_ui()  # 棋子從 scale 0 生成
 
 	# ── 彈出動畫：對角波從左下往右上 wave = col + (BOARD_SIZE-1-row) ──
-	var wave_map: Dictionary = {}
-	# Row 5: col0=w0 (speaker), cols1-5=w1-5 (SFX)
-	if not wave_map.has(0): wave_map[0] = []
-	wave_map[0].append(_note_piece)
-	if is_instance_valid(_note_icon): wave_map[0].append(_note_icon)
-	for i in range(5):
-		var w: int = i + 1
-		if not wave_map.has(w): wave_map[w] = []
-		wave_map[w].append(_volume_pieces[i])
-	# Row 4: col0=w1 (note), cols1-5=w2-6 (BGM)
-	if not wave_map.has(1): wave_map[1] = []
-	wave_map[1].append(_bgm_note_piece)
-	if is_instance_valid(_bgm_note_icon): wave_map[1].append(_bgm_note_icon)
-	for i in range(5):
-		var w: int = i + 2
-		if not wave_map.has(w): wave_map[w] = []
-		wave_map[w].append(_bgm_volume_pieces[i])
-	# Row 3: cols0-4=w2-6 (filler[11-15]), col5=w7 (?)
-	if not wave_map.has(2): wave_map[2] = []
-	wave_map[2].append(_filler_pieces[11])
-	for i in range(4):
-		var w: int = i + 3
-		if not wave_map.has(w): wave_map[w] = []
-		wave_map[w].append(_filler_pieces[12 + i])
-	if not wave_map.has(7): wave_map[7] = []
-	wave_map[7].append(_question_piece)
-	# Row 2: cols0-4=w3-7 (filler[6-10]), col5=w8 (extra toggle)
-	for i in range(5):
-		var w: int = i + 3
-		if not wave_map.has(w): wave_map[w] = []
-		wave_map[w].append(_filler_pieces[6 + i])
-	if not wave_map.has(8): wave_map[8] = []
-	wave_map[8].append(_new_rule_piece)
-	# Row 1: col0=w4 (-1), cols1-3=w5-7 (digits), col4=w8 (+1), col5=w9 (filler[5])
-	if not wave_map.has(4): wave_map[4] = []
-	wave_map[4].append(_time_row1_backing[0])
-	if is_instance_valid(_time_minus1_symbol): wave_map[4].append(_time_minus1_symbol)
-	for i in range(3):
-		var w: int = i + 5
-		if not wave_map.has(w): wave_map[w] = []
-		wave_map[w].append(_time_row1_backing[1 + i])
-	if not wave_map.has(8): wave_map[8] = []
-	wave_map[8].append(_time_row1_backing[4])
-	if is_instance_valid(_time_plus1_symbol): wave_map[8].append(_time_plus1_symbol)
-	if not wave_map.has(9): wave_map[9] = []
-	wave_map[9].append(_filler_pieces[5])
-	# Row 0: cols0-4=w5-9 (filler[0-4]), col5=w10 (timer toggle)
-	for i in range(5):
-		var w: int = i + 5
-		if not wave_map.has(w): wave_map[w] = []
-		wave_map[w].append(_filler_pieces[i])
-	if not wave_map.has(10): wave_map[10] = []
-	wave_map[10].append(_time_toggle_piece)
+	var wave_map: Dictionary = _build_setup_wave_map()
 	var max_pop := 0.0
 	var sorted_waves: Array = wave_map.keys()
 	sorted_waves.sort()
@@ -854,19 +788,7 @@ func _create_setup_ui() -> void:
 		fp.scale    = Vector2.ZERO
 		fp.set_piece_type(1)
 		_filler_pieces.append(fp)
-		var lbl         := Label.new()
-		lbl.text         = TIMER_WORD[c]
-		lbl.add_theme_font_override("font", MENU_FONT)
-		lbl.add_theme_font_size_override("font_size", 42)
-		lbl.add_theme_color_override("font_color", Color.WHITE)
-		lbl.add_theme_constant_override("outline_size", 2)
-		lbl.add_theme_color_override("font_outline_color", Color.BLACK)
-		lbl.size                 = Vector2(GRID_STEP, GRID_STEP)
-		lbl.position             = Vector2(sx - GRID_STEP / 2.0, sy - GRID_STEP / 2.0)
-		lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		lbl.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
-		lbl.mouse_filter         = Control.MOUSE_FILTER_IGNORE
-		_setup_container.add_child(lbl)
+		_setup_container.add_child(_make_menu_label(TIMER_WORD[c], 42, Vector2(GRID_STEP, GRID_STEP), Vector2(sx - GRID_STEP / 2.0, sy - GRID_STEP / 2.0)))
 	# col 5: timer ON/OFF 開關
 	var r0c5_lx: float = (5 - BOARD_SIZE / 2.0 + 0.5) * GRID_STEP
 	var r0c5_sx: float = CENTER_POS.x + r0c5_lx
@@ -876,16 +798,7 @@ func _create_setup_ui() -> void:
 	_time_toggle_piece.position = Vector2(r0c5_lx, r0_ly)
 	_time_toggle_piece.scale    = Vector2.ZERO
 	_time_toggle_rect = Rect2(Vector2(r0c5_sx - GRID_STEP / 2.0, r0c5_sy - GRID_STEP / 2.0), Vector2(GRID_STEP, GRID_STEP))
-	_timer_toggle_label = Label.new()
-	_timer_toggle_label.add_theme_font_override("font", MENU_FONT)
-	_timer_toggle_label.add_theme_font_size_override("font_size", 28)
-	_timer_toggle_label.add_theme_constant_override("outline_size", 2)
-	_timer_toggle_label.add_theme_color_override("font_outline_color", Color.BLACK)
-	_timer_toggle_label.size                 = Vector2(GRID_STEP, GRID_STEP)
-	_timer_toggle_label.position             = Vector2(r0c5_sx - GRID_STEP / 2.0, r0c5_sy - GRID_STEP / 2.0)
-	_timer_toggle_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_timer_toggle_label.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
-	_timer_toggle_label.mouse_filter         = Control.MOUSE_FILTER_IGNORE
+	_timer_toggle_label = _make_menu_label("", 28, Vector2(GRID_STEP, GRID_STEP), Vector2(r0c5_sx - GRID_STEP / 2.0, r0c5_sy - GRID_STEP / 2.0))
 	_setup_container.add_child(_timer_toggle_label)
 
 	# ── Row 1: TIMER 控制 ────────────────────────────────────────────────
@@ -916,16 +829,9 @@ func _create_setup_ui() -> void:
 		dp.scale    = Vector2.ZERO
 		dp.set_piece_type(2)
 		_time_row1_backing.append(dp)
-		var dlbl := Label.new()
-		dlbl.add_theme_font_override("font", MENU_FONT)
-		dlbl.add_theme_font_size_override("font_size", 42)
+		var dlbl := _make_menu_label("", 42, Vector2(GRID_STEP, GRID_STEP), Vector2(sx - GRID_STEP / 2.0, r1_sy - GRID_STEP / 2.0))
 		dlbl.add_theme_color_override("font_color", Color.BLACK)
 		dlbl.add_theme_constant_override("outline_size", 0)
-		dlbl.size                 = Vector2(GRID_STEP, GRID_STEP)
-		dlbl.position             = Vector2(sx - GRID_STEP / 2.0, r1_sy - GRID_STEP / 2.0)
-		dlbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		dlbl.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
-		dlbl.mouse_filter         = Control.MOUSE_FILTER_IGNORE
 		_setup_container.add_child(dlbl)
 		_digit_labels.append(dlbl)
 	_time_value_rect = Rect2(
@@ -969,19 +875,7 @@ func _create_setup_ui() -> void:
 		fp.scale    = Vector2.ZERO
 		fp.set_piece_type(1)
 		_filler_pieces.append(fp)
-		var lbl         := Label.new()
-		lbl.text         = EXTRA_WORD[c]
-		lbl.add_theme_font_override("font", MENU_FONT)
-		lbl.add_theme_font_size_override("font_size", 42)
-		lbl.add_theme_color_override("font_color", Color.WHITE)
-		lbl.add_theme_constant_override("outline_size", 2)
-		lbl.add_theme_color_override("font_outline_color", Color.BLACK)
-		lbl.size                 = Vector2(GRID_STEP, GRID_STEP)
-		lbl.position             = Vector2(sx - GRID_STEP / 2.0, sy - GRID_STEP / 2.0)
-		lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		lbl.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
-		lbl.mouse_filter         = Control.MOUSE_FILTER_IGNORE
-		_setup_container.add_child(lbl)
+		_setup_container.add_child(_make_menu_label(EXTRA_WORD[c], 42, Vector2(GRID_STEP, GRID_STEP), Vector2(sx - GRID_STEP / 2.0, sy - GRID_STEP / 2.0)))
 	# col 5: EXTRA ON/OFF 開關
 	var r2c5_lx: float = (5 - BOARD_SIZE / 2.0 + 0.5) * GRID_STEP
 	var r2c5_sx: float = CENTER_POS.x + r2c5_lx
@@ -991,16 +885,7 @@ func _create_setup_ui() -> void:
 	_new_rule_piece.position = Vector2(r2c5_lx, r2_ly)
 	_new_rule_piece.scale    = Vector2.ZERO
 	_new_rule_toggle_rect = Rect2(Vector2(r2c5_sx - GRID_STEP / 2.0, r2c5_sy - GRID_STEP / 2.0), Vector2(GRID_STEP, GRID_STEP))
-	_new_rule_label = Label.new()
-	_new_rule_label.add_theme_font_override("font", MENU_FONT)
-	_new_rule_label.add_theme_font_size_override("font_size", 28)
-	_new_rule_label.add_theme_constant_override("outline_size", 2)
-	_new_rule_label.add_theme_color_override("font_outline_color", Color.BLACK)
-	_new_rule_label.size                 = Vector2(GRID_STEP, GRID_STEP)
-	_new_rule_label.position             = Vector2(r2c5_sx - GRID_STEP / 2.0, r2c5_sy - GRID_STEP / 2.0)
-	_new_rule_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_new_rule_label.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
-	_new_rule_label.mouse_filter         = Control.MOUSE_FILTER_IGNORE
+	_new_rule_label = _make_menu_label("", 28, Vector2(GRID_STEP, GRID_STEP), Vector2(r2c5_sx - GRID_STEP / 2.0, r2c5_sy - GRID_STEP / 2.0))
 	_setup_container.add_child(_new_rule_label)
 
 	# ── Row 3: 空白填充 + ? ───────────────────────────────────────────────
@@ -1023,54 +908,13 @@ func _create_setup_ui() -> void:
 	_question_piece.scale    = Vector2.ZERO
 	_question_piece.set_piece_type(2)
 	_question_rect = Rect2(Vector2(r3c5_sx - GRID_STEP / 2.0, r3_sy - GRID_STEP / 2.0), Vector2(GRID_STEP, GRID_STEP))
-	var q_lbl         := Label.new()
-	q_lbl.text         = "?"
-	q_lbl.add_theme_font_override("font", MENU_FONT)
-	q_lbl.add_theme_font_size_override("font_size", 42)
+	var q_lbl := _make_menu_label("?", 42, Vector2(GRID_STEP, GRID_STEP), Vector2(r3c5_sx - GRID_STEP / 2.0, r3_sy - GRID_STEP / 2.0))
 	q_lbl.add_theme_color_override("font_color", Color.BLACK)
 	q_lbl.add_theme_constant_override("outline_size", 0)
-	q_lbl.size                 = Vector2(GRID_STEP, GRID_STEP)
-	q_lbl.position             = Vector2(r3c5_sx - GRID_STEP / 2.0, r3_sy - GRID_STEP / 2.0)
-	q_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	q_lbl.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
-	q_lbl.mouse_filter         = Control.MOUSE_FILTER_IGNORE
 	_setup_container.add_child(q_lbl)
 
 	# ── 返回按鈕 ─────────────────────────────────────────────────────────
-	var nav_sz_b   := int(vp.y * 0.033)
-	var nav_btn_h_b := vp.y * 0.10
-	var nav_margin_b := vp.x * 0.015
-	var nav_btn_y_b := CENTER_POS.y + (BOARD_SIZE / 2.0 - 0.5) * GRID_STEP - nav_btn_h_b * 0.5 + GRID_STEP * 0.30
-	var back_x_b   := vp.x * 0.04
-	var back_y_b   := vp.y - nav_btn_h_b - vp.y * 0.04
-	var back_gap_b := nav_sz_b * 0.4
-	var back_arrow := Label.new()
-	back_arrow.text = "<"
-	back_arrow.add_theme_font_override("font", MENU_FONT)
-	back_arrow.add_theme_font_size_override("font_size", nav_sz_b)
-	back_arrow.add_theme_color_override("font_color", Color.WHITE)
-	back_arrow.add_theme_constant_override("outline_size", 2)
-	back_arrow.add_theme_color_override("font_outline_color", Color.BLACK)
-	back_arrow.size                 = Vector2(nav_sz_b + back_gap_b, nav_btn_h_b)
-	back_arrow.position             = Vector2(back_x_b, back_y_b)
-	back_arrow.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
-	back_arrow.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
-	back_arrow.mouse_filter         = Control.MOUSE_FILTER_IGNORE
-	_setup_container.add_child(back_arrow)
-	var back_text := Label.new()
-	back_text.text = "BACK"
-	back_text.add_theme_font_override("font", MENU_FONT)
-	back_text.add_theme_font_size_override("font_size", nav_sz_b)
-	back_text.add_theme_color_override("font_color", Color.WHITE)
-	back_text.add_theme_constant_override("outline_size", 2)
-	back_text.add_theme_color_override("font_outline_color", Color.BLACK)
-	back_text.size                 = Vector2(vp.x * 0.20, nav_btn_h_b)
-	back_text.position             = Vector2(back_x_b + nav_sz_b + back_gap_b, back_y_b)
-	back_text.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
-	back_text.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
-	back_text.mouse_filter         = Control.MOUSE_FILTER_IGNORE
-	_setup_container.add_child(back_text)
-	_setup_back_btn_rect = Rect2(Vector2(back_x_b, back_y_b), Vector2(vp.x * 0.25, nav_btn_h_b))
+	_setup_back_btn_rect = _create_back_button(_setup_container)
 
 	_update_volume_display()
 	_update_bgm_volume_display()
@@ -1223,7 +1067,7 @@ func _apply_volume() -> void:
 	if _is_muted or _volume_level == 0:
 		AudioServer.set_bus_volume_db(bus_idx, -80.0)
 	else:
-		AudioServer.set_bus_volume_db(bus_idx, 10.0 - float(5 - _volume_level) * 4.5)
+		AudioServer.set_bus_volume_db(bus_idx, 5.5 - float(5 - _volume_level) * 4.5)
 
 
 func _update_bgm_volume_display() -> void:
@@ -1252,7 +1096,7 @@ func _apply_bgm_volume() -> void:
 	if _bgm_is_muted or _bgm_volume_level == 0:
 		AudioServer.set_bus_volume_db(bus_idx, -80.0)
 	else:
-		AudioServer.set_bus_volume_db(bus_idx, -float(5 - _bgm_volume_level) * 5.0)
+		AudioServer.set_bus_volume_db(bus_idx, -9.0 - float(5 - _bgm_volume_level) * 5.0)
 
 func _pulse_symbol(sym: Node) -> void:
 	if not is_instance_valid(sym): return
@@ -1271,53 +1115,7 @@ func _go_back_from_setup() -> void:
 	fade_out.tween_property(_setup_container, "modulate:a", 0.0, 0.25).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 
 	# 縮回動畫：對角波從右上往左下 wave = col + (BOARD_SIZE-1-row)，delay 反轉
-	var wave_map2: Dictionary = {}
-	if not wave_map2.has(0): wave_map2[0] = []
-	wave_map2[0].append(_note_piece)
-	if is_instance_valid(_note_icon): wave_map2[0].append(_note_icon)
-	for i in range(5):
-		var w: int = i + 1
-		if not wave_map2.has(w): wave_map2[w] = []
-		wave_map2[w].append(_volume_pieces[i])
-	if not wave_map2.has(1): wave_map2[1] = []
-	wave_map2[1].append(_bgm_note_piece)
-	if is_instance_valid(_bgm_note_icon): wave_map2[1].append(_bgm_note_icon)
-	for i in range(5):
-		var w: int = i + 2
-		if not wave_map2.has(w): wave_map2[w] = []
-		wave_map2[w].append(_bgm_volume_pieces[i])
-	if not wave_map2.has(2): wave_map2[2] = []
-	wave_map2[2].append(_filler_pieces[11])
-	for i in range(4):
-		var w: int = i + 3
-		if not wave_map2.has(w): wave_map2[w] = []
-		wave_map2[w].append(_filler_pieces[12 + i])
-	if not wave_map2.has(7): wave_map2[7] = []
-	wave_map2[7].append(_question_piece)
-	for i in range(5):
-		var w: int = i + 3
-		if not wave_map2.has(w): wave_map2[w] = []
-		wave_map2[w].append(_filler_pieces[6 + i])
-	if not wave_map2.has(8): wave_map2[8] = []
-	wave_map2[8].append(_new_rule_piece)
-	if not wave_map2.has(4): wave_map2[4] = []
-	wave_map2[4].append(_time_row1_backing[0])
-	if is_instance_valid(_time_minus1_symbol): wave_map2[4].append(_time_minus1_symbol)
-	for i in range(3):
-		var w: int = i + 5
-		if not wave_map2.has(w): wave_map2[w] = []
-		wave_map2[w].append(_time_row1_backing[1 + i])
-	if not wave_map2.has(8): wave_map2[8] = []
-	wave_map2[8].append(_time_row1_backing[4])
-	if is_instance_valid(_time_plus1_symbol): wave_map2[8].append(_time_plus1_symbol)
-	if not wave_map2.has(9): wave_map2[9] = []
-	wave_map2[9].append(_filler_pieces[5])
-	for i in range(5):
-		var w: int = i + 5
-		if not wave_map2.has(w): wave_map2[w] = []
-		wave_map2[w].append(_filler_pieces[i])
-	if not wave_map2.has(10): wave_map2[10] = []
-	wave_map2[10].append(_time_toggle_piece)
+	var wave_map2: Dictionary = _build_setup_wave_map()
 	var sorted_w2: Array = wave_map2.keys()
 	sorted_w2.sort()
 	var max_wave2: int = sorted_w2[-1]
@@ -1411,6 +1209,62 @@ func _destroy_setup_ui() -> void:
 	_question_rect  = Rect2()
 
 
+func _build_setup_wave_map() -> Dictionary:
+	var m: Dictionary = {}
+	# Row 5: col0=w0 (speaker/note), cols1-5=w1-5 (SFX)
+	m[0] = [_note_piece]
+	if is_instance_valid(_note_icon): m[0].append(_note_icon)
+	for i in range(5):
+		var w: int = i + 1
+		if not m.has(w): m[w] = []
+		m[w].append(_volume_pieces[i])
+	# Row 4: col0=w1 (BGM note), cols1-5=w2-6 (BGM)
+	if not m.has(1): m[1] = []
+	m[1].append(_bgm_note_piece)
+	if is_instance_valid(_bgm_note_icon): m[1].append(_bgm_note_icon)
+	for i in range(5):
+		var w: int = i + 2
+		if not m.has(w): m[w] = []
+		m[w].append(_bgm_volume_pieces[i])
+	# Row 3: cols0-4=w2-6 (filler[11-15]), col5=w7 (?)
+	if not m.has(2): m[2] = []
+	m[2].append(_filler_pieces[11])
+	for i in range(4):
+		var w: int = i + 3
+		if not m.has(w): m[w] = []
+		m[w].append(_filler_pieces[12 + i])
+	if not m.has(7): m[7] = []
+	m[7].append(_question_piece)
+	# Row 2: cols0-4=w3-7 (filler[6-10]), col5=w8 (EXTRA toggle)
+	for i in range(5):
+		var w: int = i + 3
+		if not m.has(w): m[w] = []
+		m[w].append(_filler_pieces[6 + i])
+	if not m.has(8): m[8] = []
+	m[8].append(_new_rule_piece)
+	# Row 1: col0=w4 (-1), cols1-3=w5-7 (digits), col4=w8 (+1), col5=w9 (filler[5])
+	if not m.has(4): m[4] = []
+	m[4].append(_time_row1_backing[0])
+	if is_instance_valid(_time_minus1_symbol): m[4].append(_time_minus1_symbol)
+	for i in range(3):
+		var w: int = i + 5
+		if not m.has(w): m[w] = []
+		m[w].append(_time_row1_backing[1 + i])
+	if not m.has(8): m[8] = []
+	m[8].append(_time_row1_backing[4])
+	if is_instance_valid(_time_plus1_symbol): m[8].append(_time_plus1_symbol)
+	if not m.has(9): m[9] = []
+	m[9].append(_filler_pieces[5])
+	# Row 0: cols0-4=w5-9 (filler[0-4]), col5=w10 (TIMER toggle)
+	for i in range(5):
+		var w: int = i + 5
+		if not m.has(w): m[w] = []
+		m[w].append(_filler_pieces[i])
+	if not m.has(10): m[10] = []
+	m[10].append(_time_toggle_piece)
+	return m
+
+
 func _show_rules2() -> void:
 	if _in_rules2 or is_animating:
 		return
@@ -1474,19 +1328,7 @@ func _create_rules2_ui() -> void:
 		var size: int    = line_data[1]
 		var h: float     = float(line_data[2])
 		if text != "":
-			var lbl := Label.new()
-			lbl.text = text
-			lbl.add_theme_font_override("font", MENU_FONT)
-			lbl.add_theme_font_size_override("font_size", size)
-			lbl.add_theme_color_override("font_color", Color.WHITE)
-			lbl.add_theme_constant_override("outline_size", 2)
-			lbl.add_theme_color_override("font_outline_color", Color.BLACK)
-			lbl.size                 = Vector2(vp.x, h)
-			lbl.position             = Vector2(0.0, cur_y)
-			lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-			lbl.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
-			lbl.mouse_filter         = Control.MOUSE_FILTER_IGNORE
-			_rules2_container.add_child(lbl)
+			_rules2_container.add_child(_make_menu_label(text, size, Vector2(vp.x, h), Vector2(0.0, cur_y)))
 		cur_y += h
 
 	var nav_sz     := int(vp.y * 0.033)
@@ -1495,49 +1337,8 @@ func _create_rules2_ui() -> void:
 	var nav_margin := vp.x * 0.015
 	var nav_btn_y  := CENTER_POS.y + (BOARD_SIZE / 2.0 - 0.5) * GRID_STEP - nav_btn_h * 0.5 + GRID_STEP * 0.30
 
-	var back_x   := vp.x * 0.04
-	var back_y   := vp.y - nav_btn_h - vp.y * 0.04
-	var back_gap := nav_sz * 0.4
-	var back_arrow := Label.new()
-	back_arrow.text = "<"
-	back_arrow.add_theme_font_override("font", MENU_FONT)
-	back_arrow.add_theme_font_size_override("font_size", nav_sz)
-	back_arrow.add_theme_color_override("font_color", Color.WHITE)
-	back_arrow.add_theme_constant_override("outline_size", 2)
-	back_arrow.add_theme_color_override("font_outline_color", Color.BLACK)
-	back_arrow.size                 = Vector2(nav_sz + back_gap, nav_btn_h)
-	back_arrow.position             = Vector2(back_x, back_y)
-	back_arrow.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
-	back_arrow.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
-	back_arrow.mouse_filter         = Control.MOUSE_FILTER_IGNORE
-	_rules2_container.add_child(back_arrow)
-	var back_text := Label.new()
-	back_text.text = "BACK"
-	back_text.add_theme_font_override("font", MENU_FONT)
-	back_text.add_theme_font_size_override("font_size", nav_sz)
-	back_text.add_theme_color_override("font_color", Color.WHITE)
-	back_text.add_theme_constant_override("outline_size", 2)
-	back_text.add_theme_color_override("font_outline_color", Color.BLACK)
-	back_text.size                 = Vector2(vp.x * 0.20, nav_btn_h)
-	back_text.position             = Vector2(back_x + nav_sz + back_gap, back_y)
-	back_text.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
-	back_text.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
-	back_text.mouse_filter         = Control.MOUSE_FILTER_IGNORE
-	_rules2_container.add_child(back_text)
-	_rules2_back_rect = Rect2(Vector2(back_x, back_y), Vector2(vp.x * 0.25, nav_btn_h))
-	var nav_left   := Label.new()
-	nav_left.text = "<<"
-	nav_left.add_theme_font_override("font", MENU_FONT)
-	nav_left.add_theme_font_size_override("font_size", nav_sz)
-	nav_left.add_theme_color_override("font_color", Color.WHITE)
-	nav_left.add_theme_constant_override("outline_size", 2)
-	nav_left.add_theme_color_override("font_outline_color", Color.BLACK)
-	nav_left.size                 = Vector2(nav_btn_w, nav_btn_h)
-	nav_left.position             = Vector2(nav_margin, nav_btn_y)
-	nav_left.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	nav_left.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
-	nav_left.mouse_filter         = Control.MOUSE_FILTER_IGNORE
-	_rules2_container.add_child(nav_left)
+	_rules2_back_rect = _create_back_button(_rules2_container)
+	_rules2_container.add_child(_make_menu_label("<<", nav_sz, Vector2(nav_btn_w, nav_btn_h), Vector2(nav_margin, nav_btn_y)))
 	_rules2_nav_left_rect = Rect2(Vector2(nav_margin, nav_btn_y), Vector2(nav_btn_w, nav_btn_h))
 
 
@@ -1779,25 +1580,9 @@ func _show_difficulty() -> void:
 		row_labels[0][col].text = DIFF_WORDS[0][col]
 
 	# 左下角 < 返回按鈕
-	var vp    := get_viewport_rect().size
-	var bw    := vp.x * 0.08
-	var bh    := vp.y * 0.10
-	var bx    := vp.x * 0.02
-	var by    := vp.y - bh - vp.y * 0.03
-	_diff_back_label = Label.new()
-	_diff_back_label.text = "<"
-	_diff_back_label.add_theme_font_override("font", MENU_FONT)
-	_diff_back_label.add_theme_font_size_override("font_size", int(vp.y * 0.055))
-	_diff_back_label.add_theme_color_override("font_color", Color.WHITE)
-	_diff_back_label.add_theme_constant_override("outline_size", 2)
-	_diff_back_label.add_theme_color_override("font_outline_color", Color.BLACK)
-	_diff_back_label.size                 = Vector2(bw, bh)
-	_diff_back_label.position             = Vector2(bx, by)
-	_diff_back_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_diff_back_label.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
-	_diff_back_label.mouse_filter         = Control.MOUSE_FILTER_IGNORE
-	label_container.add_child(_diff_back_label)
-	_diff_back_rect = Rect2(Vector2(bx, by), Vector2(bw, bh))
+	var back := _create_corner_back()
+	_diff_back_label = back[0]
+	_diff_back_rect  = back[1]
 
 	_in_difficulty_select = true
 	is_animating = false
@@ -1911,25 +1696,9 @@ func _show_color_select() -> void:
 			row_labels[row][col].add_theme_color_override("font_color", Color.WHITE)
 
 	# 左下角 < 返回按鈕
-	var vp  := get_viewport_rect().size
-	var bw  := vp.x * 0.08
-	var bh  := vp.y * 0.10
-	var bx  := vp.x * 0.02
-	var by  := vp.y - bh - vp.y * 0.03
-	_color_back_label = Label.new()
-	_color_back_label.text = "<"
-	_color_back_label.add_theme_font_override("font", MENU_FONT)
-	_color_back_label.add_theme_font_size_override("font_size", int(vp.y * 0.055))
-	_color_back_label.add_theme_color_override("font_color", Color.WHITE)
-	_color_back_label.add_theme_constant_override("outline_size", 2)
-	_color_back_label.add_theme_color_override("font_outline_color", Color.BLACK)
-	_color_back_label.size                 = Vector2(bw, bh)
-	_color_back_label.position             = Vector2(bx, by)
-	_color_back_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_color_back_label.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
-	_color_back_label.mouse_filter         = Control.MOUSE_FILTER_IGNORE
-	label_container.add_child(_color_back_label)
-	_color_back_rect = Rect2(Vector2(bx, by), Vector2(bw, bh))
+	var back := _create_corner_back()
+	_color_back_label = back[0]
+	_color_back_rect  = back[1]
 
 	_in_color_select = true
 	is_animating     = false
@@ -2004,25 +1773,9 @@ func _go_back_from_color() -> void:
 			row_labels[row][col].text = DIFF_WORDS[row][col]
 
 	# 重建 < 返回按鈕，進入難度選擇狀態
-	var vp  := get_viewport_rect().size
-	var bw  := vp.x * 0.08
-	var bh  := vp.y * 0.10
-	var bx  := vp.x * 0.02
-	var by  := vp.y - bh - vp.y * 0.03
-	_diff_back_label = Label.new()
-	_diff_back_label.text = "<"
-	_diff_back_label.add_theme_font_override("font", MENU_FONT)
-	_diff_back_label.add_theme_font_size_override("font_size", int(vp.y * 0.055))
-	_diff_back_label.add_theme_color_override("font_color", Color.WHITE)
-	_diff_back_label.add_theme_constant_override("outline_size", 2)
-	_diff_back_label.add_theme_color_override("font_outline_color", Color.BLACK)
-	_diff_back_label.size                 = Vector2(bw, bh)
-	_diff_back_label.position             = Vector2(bx, by)
-	_diff_back_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_diff_back_label.vertical_alignment   = VERTICAL_ALIGNMENT_CENTER
-	_diff_back_label.mouse_filter         = Control.MOUSE_FILTER_IGNORE
-	label_container.add_child(_diff_back_label)
-	_diff_back_rect = Rect2(Vector2(bx, by), Vector2(bw, bh))
+	var back := _create_corner_back()
+	_diff_back_label = back[0]
+	_diff_back_rect  = back[1]
 
 	_in_difficulty_select = true
 	is_animating          = false
