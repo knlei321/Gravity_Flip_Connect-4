@@ -2,6 +2,12 @@ extends Node
 
 const SAMPLE_RATE := 44100.0
 
+# 高頻音效的波形快取：即時生成一次後重複使用，避免每次播放都在主執行緒重算上萬個樣本
+var _drop_bufs:     Array               = []  # 3 個隨機變體，保留落子聲的細微變化
+var _hover_buf:     PackedVector2Array  = PackedVector2Array()
+var _reverse_buf:   PackedVector2Array  = PackedVector2Array()
+var _rotation_bufs: Dictionary          = {}  # dur → buffer（play_rotation 有多種時長）
+
 # 落子 / 旋轉後重力落地：敲木門聲（阻尼振盪器）
 # 原理：衰減正弦波模擬門板振動，極短雜訊模擬指節衝擊
 # Karplus-Strong 是撥弦算法，所以改成這種做法
@@ -20,41 +26,53 @@ func _make_drop_buf() -> PackedVector2Array:
 	return buf
 
 func play_drop() -> void:
-	_spawn_player(_make_drop_buf(), 0.40)
+	if _drop_bufs.is_empty():
+		for _i in range(3):
+			_drop_bufs.append(_make_drop_buf())
+	_spawn_player(_drop_bufs[randi() % _drop_bufs.size()], 0.40)
 
 # 滑鼠 hover 選項：輕版落子聲（振幅較小、衰減較快）
 func play_hover() -> void:
 	var dur := 0.20
-	var n   := int(SAMPLE_RATE * dur)
-	var buf := PackedVector2Array()
-	buf.resize(n)
-	for i in range(n):
-		var t     := float(i) / SAMPLE_RATE
-		var noise := randf_range(-1.0, 1.0) * exp(-t * 350.0) * 0.35
-		var click := sin(TAU * 200.0 * t) * exp(-t * 90.0)   * 0.20
-		var thud  := sin(TAU * 140.0 * t) * exp(-t * 35.0)   * 0.45
-		var s     := (noise + click + thud) * 0.40
-		buf[i]     = Vector2(s, s)
-	_spawn_player(buf, dur)
+	if _hover_buf.is_empty():
+		var n   := int(SAMPLE_RATE * dur)
+		var buf := PackedVector2Array()
+		buf.resize(n)
+		for i in range(n):
+			var t     := float(i) / SAMPLE_RATE
+			var noise := randf_range(-1.0, 1.0) * exp(-t * 350.0) * 0.35
+			var click := sin(TAU * 200.0 * t) * exp(-t * 90.0)   * 0.20
+			var thud  := sin(TAU * 140.0 * t) * exp(-t * 35.0)   * 0.45
+			var s     := (noise + click + thud) * 0.40
+			buf[i]     = Vector2(s, s)
+		_hover_buf = buf
+	_spawn_player(_hover_buf, dur)
 
 # 縮回音效：較輕、音調稍高，有立即衝擊感
 func play_drop_reverse() -> void:
 	var dur := 0.30
-	var n   := int(SAMPLE_RATE * dur)
-	var buf := PackedVector2Array()
-	buf.resize(n)
-	for i in range(n):
-		var t     := float(i) / SAMPLE_RATE
-		var noise := randf_range(-1.0, 1.0) * exp(-t * 380.0) * 0.38
-		var click := sin(TAU * 130.0 * t) * exp(-t * 75.0)   * 0.22
-		var thud  := sin(TAU * 120.0 * t) * exp(-t * 26.0)   * 0.50
-		var s     := (noise + click + thud) * 0.42
-		buf[i]    = Vector2(s, s)
-	_spawn_player(buf, dur)
+	if _reverse_buf.is_empty():
+		var n   := int(SAMPLE_RATE * dur)
+		var buf := PackedVector2Array()
+		buf.resize(n)
+		for i in range(n):
+			var t     := float(i) / SAMPLE_RATE
+			var noise := randf_range(-1.0, 1.0) * exp(-t * 380.0) * 0.38
+			var click := sin(TAU * 130.0 * t) * exp(-t * 75.0)   * 0.22
+			var thud  := sin(TAU * 120.0 * t) * exp(-t * 26.0)   * 0.50
+			var s     := (noise + click + thud) * 0.42
+			buf[i]    = Vector2(s, s)
+		_reverse_buf = buf
+	_spawn_player(_reverse_buf, dur)
 
 # 旋轉：木頭滾動聲
 # 用阻尼振盪器生成單個叩擊 impulse，再依 ease-in-out 速度散佈
 func play_rotation(dur: float = 0.88) -> void:
+	if not _rotation_bufs.has(dur):
+		_rotation_bufs[dur] = _make_rotation_buf(dur)
+	_spawn_player(_rotation_bufs[dur], dur)
+
+func _make_rotation_buf(dur: float) -> PackedVector2Array:
 	var n := int(SAMPLE_RATE * dur)
 	var buf := PackedVector2Array()
 	buf.resize(n)
@@ -84,9 +102,9 @@ func play_rotation(dur: float = 0.88) -> void:
 				buf[idx] = Vector2(buf[idx].x + s, buf[idx].y + s)
 		t_cur += lerp(0.19, 0.055, speed)
 
-	_spawn_player(buf, dur)
+	return buf
 
-# 勝利琶音：C5 E5 G5 C6
+# 勝利：兩記短促撞擊音「登－登」
 func play_win() -> void:
 	# 兩記短促有力的撞擊音「登－登」
 	# 調整點：FREQS 換音高，STARTS[1] 調兩音間距，DECAY 調衰減速度
