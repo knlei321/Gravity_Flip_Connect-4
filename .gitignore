@@ -5,3 +5,26 @@
 # macOS
 .DS_Store
 **/.DS_Store
+
+# Local test files
+code/test_sim.gd
+code/test_sim.gd.uid
+test_node.tscn
+code/ai_rotation.gd
+code/ai_rotation.gd.uid
+code/test_sim_rot.gd
+code/test_sim_rot.gd.uid
+test_node_rot.tscn
+code/ai_ring.gd
+code/ai_ring.gd.uid
+code/test_sim_ring.gd
+code/test_sim_ring.gd.uid
+test_node_ring.tscn
+
+# Local test infrastructure & results
+run_tests.sh
+run_rot_tests.sh
+run_ring_tests.sh
+sim/
+test_logs/
+*.log
